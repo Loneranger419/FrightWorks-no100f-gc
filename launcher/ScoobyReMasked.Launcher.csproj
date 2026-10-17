@@ -17,7 +17,8 @@
     <ApplicationIcon>refrightened.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
-    <EmbeddedResource Include="scooby.png" LogicalName="ScoobyReMasked.scooby.png" />
+    <EmbeddedResource Include="art\header.jpg" LogicalName="ScoobyReMasked.header.jpg" />
+    <EmbeddedResource Include="art\shaggy_scooby.png" LogicalName="ScoobyReMasked.shaggy_scooby.png" />
     <EmbeddedResource Include="title.ttf" LogicalName="ScoobyReMasked.title.ttf" Condition="Exists('title.ttf')" />
   </ItemGroup>
 </Project>

@@ -101,7 +101,7 @@ powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 -Zip
   [`wiicompiled/THIRD-PARTY-NOTICES.md`](wiicompiled/THIRD-PARTY-NOTICES.md)
 - Launcher title font **"Scooby Doo"** by Lauren Ashpole
   ([FontSpace](https://www.fontspace.com/scooby-doo-font-f7039)), free for personal use
-- Launcher Scooby and Mystery Machine images: fan art
+- Launcher artwork: Scooby-Doo artwork, Scooby-Doo ™ & © Hanna-Barbera / Warner Bros.
 
 ## License
 

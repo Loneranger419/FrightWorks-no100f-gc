@@ -1003,11 +1003,16 @@ gfx::Viewport map_logical_viewport(const gfx::Viewport& logicalViewport) noexcep
 
   const float scaleX = static_cast<float>(targetWidth) / static_cast<float>(logicalFbWidth);
   const float scaleY = static_cast<float>(targetHeight) / static_cast<float>(logicalFbHeight);
+  // Games compute the viewport scale in float (NO100F's 640 arrives as 639.99997); scaled, that ends a hair short
+  // of the last pixel, which then never gets drawn (a 1 px line of clear colour at the right and bottom).
+  // Snap edges within 0.01 px of a whole pixel onto it.
+  const auto snap = [](float v) { const float r = std::round(v); return std::abs(v - r) < 0.01f ? r : v; };
+  const float left = snap(logicalViewport.left * scaleX), top = snap(logicalViewport.top * scaleY);
   return {
-      .left = logicalViewport.left * scaleX,
-      .top = logicalViewport.top * scaleY,
-      .width = logicalViewport.width * scaleX,
-      .height = logicalViewport.height * scaleY,
+      .left = left,
+      .top = top,
+      .width = snap(left + logicalViewport.width * scaleX) - left,
+      .height = snap(top + logicalViewport.height * scaleY) - top,
       .znear = logicalViewport.znear,
       .zfar = logicalViewport.zfar,
   };
