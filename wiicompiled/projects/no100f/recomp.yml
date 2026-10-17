@@ -1,0 +1,42 @@
+schema_version: 1
+workspace_root: ../..
+
+# Scooby-Doo! Night of 100 Frights, North America (GIHE78 rev 1), GameCube. main.dol is stripped: MAP.txt comes
+# from projects/no100f/tools (sigmatch/donormatch/fuzzymatch/align -> genmap), see AGENTS.md.
+project:
+  id: no100f-gihe78
+  display_name: Scooby-Doo! Night of 100 Frights (USA)
+  game_id: GIHE78
+  region: E
+  base_manifest_format: no100f-recomp-base-manifest
+  base_manifest_stem: no100f_base
+
+memory:
+  base: 0x80000000
+  size: 0x01800000  # GameCube MEM1 (24 MiB)
+  sda_base: 0x80278280  # r13, set at 0x8000544C
+  sda2_base: 0x80279780  # r2, set at 0x80005444
+
+inputs:
+  dol:
+    path: ../game/main.dol
+    sha256: 141d562a97f9d6a8794e164611a5da45f9c50b9d89049687f051b7af12e37434
+
+translation:
+  entry_points:
+    - 0x80016A00
+  function_map:
+    path: projects/no100f/MAP.txt
+  allow_unsupported_instructions: false
+
+runtime:
+  native_registration_root: runtime/src
+  native_abi_directories:
+    - runtime/src/hle/gx
+
+output:
+  root: generated
+  functions: functions
+  runtime_config: RuntimeConfig.h
+  data_initializer: data_sections_init.cpp
+  base_manifest: ../build/base/no100f_base_manifest.json

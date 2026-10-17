@@ -1,0 +1,4 @@
+800FB508 GXInit ; manual (calls __GXFifoInit + __GXInitGX)
+8001601C OSReport ; manual (varargs; Dolphin DB calls it ___blank_char)
+80104988 OSGetArenaHi ; manual (lwz r3,-28520(r13), the slot OSSetArenaHi writes)
+80104990 OSGetArenaLo ; manual (lwz r3,-32080(r13), the slot OSSetArenaLo writes)

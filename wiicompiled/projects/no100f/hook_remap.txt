@@ -1,0 +1,442 @@
+80141220 -> 800F00B8  __write_console                          hle\c_stdio.cpp
+80218C2C -> 80001000  PARKED (PARKED)                          (no
+801D6230 -> 80001004  PARKED (PARKED)                          (no
+801D6290 -> 80001008  PARKED (PARKED)                          (no
+801D66E0 -> 8000100C  PARKED (PARKED)                          (no
+80299BF8 -> 80001010  PARKED (PARKED)                          (no
+802960C4 -> 80001014  PARKED (PARKED)                          (no
+80295834 -> 80001018  PARKED (PARKED)                          (no
+80295A6C -> 8000101C  PARKED (PARKED)                          (no
+80295BD4 -> 80001020  PARKED (PARKED)                          (no
+80295DDC -> 80001024  PARKED (PARKED)                          (no
+80295FE4 -> 80001028  PARKED (PARKED)                          (no
+80296468 -> 8000102C  PARKED (PARKED)                          (no
+8029A014 -> 80001030  PARKED (PARKED)                          (no
+8029B8D8 -> 80001034  PARKED (PARKED)                          (no
+801DD2B0 -> 80001038  PARKED (PARKED)                          (no
+8029BE5C -> 8000103C  PARKED (PARKED)                          (no
+801B2424 -> 80001040  PARKED (PARKED)                          (no
+801B2460 -> 80001044  PARKED (PARKED)                          (no
+801DD940 -> 80001048  PARKED (PARKED)                          (no
+801AE4A0 -> 8000104C  PARKED (PARKED)                          (no
+801AD1D4 -> 80001050  PARKED (PARKED)                          (no
+81800000 -> 80001054  PARKED (PARKED)                          (no
+81800008 -> 80001058  PARKED (PARKED)                          (no
+800077C8 -> 8000105C  PARKED (PARKED)                          (no
+80242D7C -> 80001060  PARKED (PARKED)                          (no
+8002001C -> 80001064  PARKED (PARKED)                          (no
+80155E08 -> 8010AB28  VIInit                                   hle\vi.cpp
+80155C08 -> 8010A930  __VIInit                                 hle\vi.cpp
+801B9934 -> 8000106C  PARKED (PARKED)                          (no
+801B993C -> 80001070  PARKED (PARKED)                          (no
+801B9944 -> 80001074  PARKED (PARKED)                          (no
+80280524 -> 80001078  PARKED (PARKED)                          (no
+80155B24 -> 8000107C  PARKED (VISetPostRetraceCallback)        hle\vi.cpp
+8028217C -> 80001080  PARKED (PARKED)                          (no
+80156780 -> 8010B468  VIConfigure                              hle\vi.cpp
+8015733C -> 8010BC04  VIFlush                                  hle\vi.cpp
+8015746C -> 8010BD20  VISetNextFrameBuffer                     hle\vi.cpp
+801BAB24 -> 80001088  PARKED (PARKED)                          (no
+801574E0 -> 8010BD8C  VISetBlack                               hle\vi.cpp
+8015755C -> 8010BE08  VIGetRetraceCount                        hle\vi.cpp
+80281F90 -> 8000108C  PARKED (PARKED)                          (no
+801575CC -> 8010BF20  VIGetCurrentLine                         hle\vi.cpp
+801562B8 -> 8010AFA0  VIWaitForRetrace                         hle\vi.cpp
+8028211C -> 80001090  PARKED (PARKED)                          (no
+8026D30C -> 80001094  PARKED (PARKED)                          (no
+8014A724 -> 801049A8  __OSInitAudioSystem                      hle\audio\audio.cpp
+8014A8E0 -> 80104B64  __OSStopAudioSystem                      hle\audio\audio.cpp
+80148C0C -> 800F47D0  AIInit                                   hle\audio\audio.cpp
+80161920 -> 800F8DC0  DSPInit                                  hle\audio\audio.cpp
+80162138 -> 800F9664  __DSP_boot_task                          hle\audio\audio.cpp
+8015C70C -> 800F7124  __AXOutInitDSP                           hle\audio\audio.cpp
+80148854 -> 800F4400  AIInitDMA                                hle\audio\audio.cpp
+80148810 -> 800F43BC  AIRegisterDMACallback                    hle\audio\audio.cpp
+801488DC -> 800F4488  AIStartDMA                               hle\audio\audio.cpp
+8028478C -> 80001098  PARKED (PARKED)                          (no
+8019F1B0 -> 8000109C  PARKED (PARKED)                          (no
+8019F1D0 -> 800010A0  PARKED (PARKED)                          (no
+8012409C -> 800010A4  PARKED (PARKED)                          (no
+8016190C -> 800F8DAC  DSPSendMailToDSP                         hle\audio\audio.cpp
+800A35E0 -> 800010A8  PARKED (PARKED)                          (no
+801618D4 -> 800010AC  PARKED (DSPCheckMailToDSP)               hle\audio\audio.cpp
+80161A5C -> 800F8F88  DSPAssertTask                            hle\audio\audio.cpp
+801A6D30 -> 800010B0  PARKED (PARKED)                          (no
+8016BF40 -> 800FE5E4  GXSetDispCopySrc                         hle\gx\gx_copy.cpp
+8016C038 -> 800FE764  GXSetDispCopyDst                         hle\gx\gx_copy.cpp
+8016BFBC -> 800010BC  PARKED (GXSetTexCopySrc)                 hle\gx\gx_copy.cpp
+8016C06C -> 800010C0  PARKED (GXSetTexCopyDst)                 hle\gx\gx_copy.cpp
+8016C594 -> 800FEAFC  GXSetCopyFilter                          hle\gx\gx_copy.cpp
+8016C79C -> 800FED24  GXSetDispCopyGamma                       hle\gx\gx_copy.cpp
+8016C7B0 -> 800010CC  PARKED (GXCopyDisp)                      hle\gx\gx_copy.cpp
+8016C918 -> 800010D0  PARKED (GXCopyTex)                       hle\gx\gx_copy.cpp
+8016C450 -> 800FE9C0  GXSetDispCopyYScale                      hle\gx\gx_copy.cpp
+8016C218 -> 8006FD3C  GXGetYScaleFactor                        hle\gx\gx_copy.cpp
+8016EC0C -> 80102464  GXCallDisplayList                        hle\gx\gx_dl.cpp
+8021B344 -> 800010DC  PARKED (PARKED)                          (no
+8021B688 -> 800010E0  PARKED (PARKED)                          (no
+8022E2BC -> 800010E4  PARKED (PARKED)                          (no
+802BB820 -> 800010E8  PARKED (PARKED)                          (no
+8016DD9C -> 80101054  GXSetNumIndStages                        hle\gx\gx_indirect.cpp
+8028FC78 -> 800010F0  PARKED (PARKED)                          (no
+8016DC58 -> 80100D48  GXSetIndTexCoordScale                    hle\gx\gx_indirect.cpp
+8028FA20 -> 800010F8  PARKED (PARKED)                          (no
+8016DDC0 -> 80101080  GXSetTevDirect                           hle\gx\gx_indirect.cpp
+8028FDAC -> 800010FC  PARKED (PARKED)                          (no
+8016DBEC -> 80100B4C  GXSetTevIndirect                         hle\gx\gx_indirect.cpp
+80168DCC -> 800FB508  GXInit                                   hle\gx\gx_init.cpp
+8016A0B8 -> 800FC77C  GXSetCPUFifo                             hle\gx\gx_init.cpp
+8016A1E0 -> 800FC88C  GXSetGPFifo                              hle\gx\gx_init.cpp
+8028B21C -> 8000110C  PARKED (PARKED)                          (no
+8016A5C4 -> 800FCE98  GXGetCPUFifo                             hle\gx\gx_init.cpp
+8016BA4C -> 800FE184  __GXPEInit                               hle\gx\gx_init.cpp
+802912FC -> 80001114  PARKED (PARKED)                          (no
+802913AC -> 80001118  PARKED (PARKED)                          (no
+8016B3BC -> 800FDD40  GXFlush                                  hle\gx\gx_init.cpp
+8016CB30 -> 8000111C  PARKED (GXLoadLightObjImm)               hle\gx\gx_lighting.cpp
+8016CBAC -> 800FF474  GXSetChanAmbColor                        hle\gx\gx_lighting.cpp
+8016CC9C -> 800FF5DC  GXSetChanMatColor                        hle\gx\gx_lighting.cpp
+8016CD8C -> 800FF744  GXSetNumChans                            hle\gx\gx_lighting.cpp
+8016CDC8 -> 800FF790  GXSetChanCtrl                            hle\gx\gx_lighting.cpp
+8028D6A4 -> 80001130  PARKED (PARKED)                          (no
+8016B584 -> 80001134  PARKED (GXAbortFrame)                    hle\gx\gx_nsmbw.cpp
+8016B798 -> 800FDF38  GXPokeAlphaMode                          hle\gx\gx_nsmbw.cpp
+8016B7AC -> 800FDF4C  GXPokeAlphaRead                          hle\gx\gx_nsmbw.cpp
+8016B7CC -> 800FDF60  GXPokeAlphaUpdate                        hle\gx\gx_nsmbw.cpp
+8016B7E4 -> 800FDF7C  GXPokeBlendMode                          hle\gx\gx_nsmbw.cpp
+8016B848 -> 800FE004  GXPokeColorUpdate                        hle\gx\gx_nsmbw.cpp
+8016B860 -> 800FE020  GXPokeDstAlpha                           hle\gx\gx_nsmbw.cpp
+8016B884 -> 800FE034  GXPokeDither                             hle\gx\gx_nsmbw.cpp
+8016B89C -> 800FE050  GXPokeZMode                              hle\gx\gx_nsmbw.cpp
+8016E90C -> 80101E2C  GXSetBlendMode                           hle\gx\gx_pixel.cpp
+8016E960 -> 80101F30  GXSetColorUpdate                         hle\gx\gx_pixel.cpp
+8016E98C -> 80101F70  GXSetAlphaUpdate                         hle\gx\gx_pixel.cpp
+8016E9B8 -> 80101FB0  GXSetZMode                               hle\gx\gx_pixel.cpp
+8016E9EC -> 80102028  GXSetZCompLoc                            hle\gx\gx_pixel.cpp
+8016EA20 -> 80102068  GXSetPixelFmt                            hle\gx\gx_pixel.cpp
+8016EAF4 -> 80102178  GXSetDither                              hle\gx\gx_pixel.cpp
+8016EB20 -> 801021B8  GXSetDstAlpha                            hle\gx\gx_pixel.cpp
+8016E5C4 -> 80101B7C  GXSetFog                                 hle\gx\gx_pixel.cpp
+8016E330 -> 80001178  PARKED (GXSetAlphaCompare)               hle\gx\gx_pixel.cpp
+8016E374 -> 8000117C  PARKED (GXSetZTexture)                   hle\gx\gx_pixel.cpp
+8016BD60 -> 80001180  PARKED (GXSetCullMode)                   hle\gx\gx_pixel.cpp
+8016BDA4 -> 80001184  PARKED (GXSetCoPlanar)                   hle\gx\gx_pixel.cpp
+8016F10C -> 80102AF8  GXSetClipMode                            hle\gx\gx_pixel.cpp
+8028CC90 -> 80001188  PARKED (PARKED)                          (no
+8016E9FC -> 8000118C  PARKED (PARKED)                          (no
+8016B9CC -> 800FE100  GXFinishInterruptHandler                 hle\gx\gx_stubs.cpp
+8016B6F4 -> 800FDE94  GXDrawDone                               hle\gx\gx_stubs.cpp
+8016B774 -> 800FDF14  GXPixModeSync                            hle\gx\gx_stubs.cpp
+80289B84 -> 80001190  PARKED (PARKED)                          (no
+8016D71C -> 80100790  __GXSetSUTexRegs                         hle\gx\gx_stubs.cpp
+8016D898 -> 8010090C  __GXSetTmemConfig                        hle\gx\gx_stubs.cpp
+8016DE3C -> 80101194  __GXFlushTextureState                    hle\gx\gx_stubs.cpp
+8016C19C -> 800FE918  GXSetDispCopyFrame2Field                 hle\gx\gx_stubs.cpp
+8016C1C0 -> 800FE944  GXSetCopyClamp                           hle\gx\gx_stubs.cpp
+8016CAA4 -> 800FF040  GXClearBoundingBox                       hle\gx\gx_stubs.cpp
+8028E26C -> 8000119C  PARKED (PARKED)                          (no
+8016BAC0 -> 800FE204  __GXSetDirtyState                        hle\gx\gx_stubs.cpp
+8028C944 -> 800011A4  PARKED (PARKED)                          (no
+8016E59C -> 800011A8  PARKED (GXSetNumTevStages)               hle\gx\gx_tev.cpp
+8016DE60 -> 800011AC  PARKED (GXSetTevOp)                      hle\gx\gx_tev.cpp
+8016E400 -> 800011B0  PARKED (GXSetTevOrder)                   hle\gx\gx_tev.cpp
+8016DEEC -> 800011B4  PARKED (GXSetTevColorIn)                 hle\gx\gx_tev.cpp
+8016DF30 -> 800011B8  PARKED (GXSetTevAlphaIn)                 hle\gx\gx_tev.cpp
+8016DF74 -> 800011BC  PARKED (GXSetTevColorOp)                 hle\gx\gx_tev.cpp
+8016DFDC -> 800011C0  PARKED (GXSetTevAlphaOp)                 hle\gx\gx_tev.cpp
+8016E044 -> 800011C4  PARKED (GXSetTevColor)                   hle\gx\gx_tev.cpp
+8016E0C0 -> 800011C8  PARKED (GXSetTevColorS10)                hle\gx\gx_tev.cpp
+8016E13C -> 800011CC  PARKED (GXSetTevKColor)                  hle\gx\gx_tev.cpp
+8016E1B0 -> 800011D0  PARKED (GXSetTevKColorSel)               hle\gx\gx_tev.cpp
+8016E20C -> 800011D4  PARKED (GXSetTevKAlphaSel)               hle\gx\gx_tev.cpp
+8016E2B0 -> 800011D8  PARKED (GXSetTevSwapModeTable)           hle\gx\gx_tev.cpp
+8016E268 -> 800011DC  PARKED (GXSetTevSwapMode)                hle\gx\gx_tev.cpp
+8016D0A4 -> 800011E0  PARKED (GXInitTexObj)                    hle\gx\gx_texture.cpp
+80170938 -> 800011E4  PARKED (PARKED)                          (no
+8017093C -> 800011E8  PARKED (PARKED)                          (no
+80170950 -> 800011EC  PARKED (PARKED)                          (no
+80170964 -> 800011F0  PARKED (PARKED)                          (no
+80170978 -> 800011F4  PARKED (PARKED)                          (no
+8017098C -> 800011F8  PARKED (PARKED)                          (no
+801709A0 -> 800011FC  PARKED (PARKED)                          (no
+8028EC30 -> 80001200  PARKED (PARKED)                          (no
+8028EC78 -> 80001204  PARKED (PARKED)                          (no
+8028ED8C -> 80001208  PARKED (PARKED)                          (no
+8028EDA0 -> 8000120C  PARKED (PARKED)                          (no
+8028EDA8 -> 80001210  PARKED (PARKED)                          (no
+80170B94 -> 80001214  PARKED (PARKED)                          (no
+801C7160 -> 80001218  PARKED (PARKED)                          (no
+8016D48C -> 8010020C  GXLoadTexObj                             hle\gx\gx_texture.cpp
+8016D310 -> 80100064  GXLoadTexObjPreLoaded                    hle\gx\gx_texture.cpp
+801C7180 -> 80001220  PARKED (PARKED)                          (no
+801C7260 -> 80001224  PARKED (PARKED)                          (no
+8028EFCC -> 80001228  PARKED (PARKED)                          (no
+8028EFF4 -> 8000122C  PARKED (PARKED)                          (no
+8016D60C -> 801005B8  GXInvalidateTexAll                       hle\gx\gx_texture.cpp
+801C7750 -> 80001230  PARKED (PARKED)                          (no
+801C77D0 -> 80001234  PARKED (PARKED)                          (no
+8028ED7C -> 80001238  PARKED (PARKED)                          (no
+80291994 -> 8000123C  PARKED (PARKED)                          (no
+8016F00C -> 80001240  PARKED (GXSetViewport)                   hle\gx\gx_transform.cpp
+802919FC -> 80001244  PARKED (PARKED)                          (no
+80173400 -> 80001248  PARKED (PARKED)                          (no
+8016F0CC -> 80102AB4  GXSetScissorBoxOffset                    hle\gx\gx_transform.cpp
+8016F054 -> 80102A04  GXSetScissor                             hle\gx\gx_transform.cpp
+8016EC7C -> 80001254  PARKED (GXSetProjection)                 hle\gx\gx_transform.cpp
+8016ED20 -> 80001258  PARKED (GXSetProjectionv)                hle\gx\gx_transform.cpp
+8016EDAC -> 8000125C  PARKED (GXGetProjectionv)                hle\gx\gx_transform.cpp
+8016EDF4 -> 80001260  PARKED (GXLoadPosMtxImm)                 hle\gx\gx_transform.cpp
+801C9990 -> 80001264  PARKED (PARKED)                          (no
+8016EE44 -> 80001268  PARKED (GXLoadNrmMtxImm)                 hle\gx\gx_transform.cpp
+801C9A20 -> 8000126C  PARKED (PARKED)                          (no
+8016EEC8 -> 80001270  PARKED (GXLoadTexMtxImm)                 hle\gx\gx_transform.cpp
+8016EE94 -> 801029E0  GXSetCurrentMtx                          hle\gx\gx_transform.cpp
+8016AA20 -> 800FD4D0  GXClearVtxDesc                           hle\gx\gx_vertex.cpp
+8016A5D4 -> 80001278  PARKED (GXSetVtxDesc)                    hle\gx\gx_vertex.cpp
+8028B89C -> 8000127C  PARKED (PARKED)                          (no
+8028BC84 -> 80001280  PARKED (PARKED)                          (no
+8028BE38 -> 80001284  PARKED (PARKED)                          (no
+8016AA58 -> 80001288  PARKED (GXSetVtxAttrFmt)                 hle\gx\gx_vertex.cpp
+8016ACB4 -> 8000128C  PARKED (GXSetVtxAttrFmtv)                hle\gx\gx_vertex.cpp
+8028C2E0 -> 80001290  PARKED (PARKED)                          (no
+8028C54C -> 80001294  PARKED (PARKED)                          (no
+8016AFD0 -> 800FD914  GXSetArray                               hle\gx\gx_vertex.cpp
+8028C5C0 -> 80001298  PARKED (PARKED)                          (no
+8016B2EC -> 800FDC80  GXSetNumTexGens                          hle\gx\gx_vertex.cpp
+8016B06C -> 800FD9B0  GXSetTexCoordGen2                        hle\gx\gx_vertex.cpp
+8016BD18 -> 800012A4  PARKED (GXEnableTexOffsets)              hle\gx\gx_vertex.cpp
+8016BC98 -> 800012A8  PARKED (GXSetLineWidth)                  hle\gx\gx_vertex.cpp
+8016BCD8 -> 800012AC  PARKED (GXSetPointSize)                  hle\gx\gx_vertex.cpp
+8016BB40 -> 800FE2A4  GXBegin                                  hle\gx\gx_vertex.cpp
+802A35B0 -> 800012B4  PARKED (PARKED)                          (no
+802A7C90 -> 800012B8  PARKED (PARKED)                          (no
+80290ADC -> 800012BC  PARKED (PARKED)                          (no
+802DE7B4 -> 800012C0  PARKED (PARKED)                          (no
+801ED3B0 -> 800012C4  PARKED (PARKED)                          (no
+8019812C -> 800012C8  PARKED (PARKED)                          (no
+80158698 -> 800012CC  PARKED (PADInit)                         hle\input\pad.cpp
+801587E8 -> 8010CEE0  PADRead                                  hle\input\pad.cpp
+80158474 -> 8010CACC  PADReset                                 hle\input\pad.cpp
+80158584 -> 8010CBCC  PADRecalibrate                           hle\input\pad.cpp
+80158AE8 -> 8010D28C  PADControlMotor                          hle\input\pad.cpp
+802CCBB4 -> 800012D8  PARKED (PARKED)                          (no
+802D0874 -> 800012DC  PARKED (PARKED)                          (no
+801BF3B4 -> 800012E0  PARKED (PARKED)                          (no
+802CC950 -> 800012E4  PARKED (PARKED)                          (no
+802D97B0 -> 800012E8  PARKED (PARKED)                          (no
+802CE3CC -> 800012EC  PARKED (PARKED)                          (no
+802CE414 -> 800012F0  PARKED (PARKED)                          (no
+802CE208 -> 800012F4  PARKED (PARKED)                          (no
+802CE684 -> 800012F8  PARKED (PARKED)                          (no
+802CE4C4 -> 800012FC  PARKED (PARKED)                          (no
+801E1630 -> 80001300  PARKED (PARKED)                          (no
+801BF634 -> 80001304  PARKED (PARKED)                          (no
+801BF638 -> 80001308  PARKED (PARKED)                          (no
+802CCBA8 -> 8000130C  PARKED (PARKED)                          (no
+801BF640 -> 80001310  PARKED (PARKED)                          (no
+801D8D30 -> 80001314  PARKED (PARKED)                          (no
+8014EE80 -> 80106E8C  OSGetResetButtonState                    hle\os\gc_hw.cpp
+801596B4 -> 800F4EBC  ARInit                                   hle\os\gc_hw.cpp
+80159778 -> 80001318  PARKED (ARGetBaseAddress)                hle\os\gc_hw.cpp
+80159780 -> 8000131C  PARKED (ARGetSize)                       hle\os\gc_hw.cpp
+80159544 -> 80001320  PARKED (ARRegisterDMACallback)           hle\os\gc_hw.cpp
+80159588 -> 80001324  PARKED (ARGetDMAStatus)                  hle\os\gc_hw.cpp
+801595C4 -> 800F4CF0  ARStartDMA                               hle\os\gc_hw.cpp
+8015B1F4 -> 800F5AD4  ARQInit                                  hle\os\gc_hw.cpp
+8015B264 -> 800F5B3C  ARQPostRequest                           hle\os\gc_hw.cpp
+80149F94 -> 801041F8  OSSetAlarm                               hle\os\os_alarm.cpp
+80149FFC -> 80104260  OSSetPeriodicAlarm                       hle\os\os_alarm.cpp
+800BD860 -> 80001328  PARKED (PARKED)                          (no
+8014A9CC -> 80104C50  DCInvalidateRange                        hle\os\os_cache.cpp
+8014A9F8 -> 80104C80  DCFlushRange                             hle\os\os_cache.cpp
+8014AA28 -> 80104CB4  DCStoreRange                             hle\os\os_cache.cpp
+8014AA58 -> 80104CE8  DCFlushRangeNoSync                       hle\os\os_cache.cpp
+801AC500 -> 8000132C  PARKED (PARKED)                          (no
+8014A9B8 -> 80104C3C  DCEnable                                 hle\os\os_cache.cpp
+8026D88C -> 80001330  PARKED (PARKED)                          (no
+8014AA84 -> 80104D18  ICInvalidateRange                        hle\os\os_cache.cpp
+8014AAB8 -> 80104D50  ICFlashInvalidate                        hle\os\os_cache.cpp
+8014AAC8 -> 80104D60  ICEnable                                 hle\os\os_cache.cpp
+801AC5D0 -> 80001334  PARKED (PARKED)                          (no
+801AC6A0 -> 80001338  PARKED (PARKED)                          (no
+8014AADC -> 80104D74  LCDisable                                hle\os\os_cache.cpp
+801AC710 -> 8000133C  PARKED (PARKED)                          (no
+801AC740 -> 80001340  PARKED (PARKED)                          (no
+801AC770 -> 80001344  PARKED (PARKED)                          (no
+801AC810 -> 80001348  PARKED (PARKED)                          (no
+801AC820 -> 8000134C  PARKED (PARKED)                          (no
+8014ACFC -> 80104F94  __OSCacheInit                            hle\os\os_cache.cpp
+8014B23C -> 8010549C  OSClearContext                           hle\os\os_context.cpp
+8014B044 -> 801052D4  OSSetCurrentContext                      hle\os\os_context.cpp
+8014B12C -> 801053BC  OSLoadContext                            hle\os\os_context.cpp
+8014CC60 -> 80105B7C  OSGetFontEncode                          hle\os\os_font.cpp
+80270CC8 -> 80001350  PARKED (PARKED)                          (no
+801B0D60 -> 80001354  PARKED (PARKED)                          (no
+8014CD44 -> 80001358  PARKED (OSLoadFont)                      hle\os\os_font.cpp
+8014D078 -> 8000135C  PARKED (OSGetFontTexel)                  hle\os\os_font.cpp
+8014FD08 -> 80107AC0  __OSThreadInit                           hle\os\os_init.cpp
+8055531C -> 80001364  PARKED (PARKED)                          (no
+8014C178 -> 80001368  PARKED (OSFatal)                         hle\os\os_init.cpp
+8029D9C0 -> 8000136C  PARKED (PARKED)                          (no
+802A83E4 -> 80001370  PARKED (PARKED)                          (no
+80171138 -> 8010A4E8  SISetSamplingRate                        hle\os\os_init.cpp
+8014E3F8 -> 80106618  __OSInitMemoryProtection                 hle\os\os_init.cpp
+80149318 -> 801035E4  OSGetConsoleType                         hle\os\os_init.cpp
+8014ED58 -> 80106D68  OSGetResetCode                           hle\os\os_init.cpp
+802761C0 -> 80001378  PARKED (PARKED)                          (no
+80149C48 -> 80103EF4  __OSPSInit                               hle\os\os_init.cpp
+80011EC8 -> 8000137C  PARKED (__init_hardware)                 hle\os\os_init.cpp
+801490EC -> 800F8BF0  PPCMfhid0                                hle\os\os_init.cpp
+801490F4 -> 800F8BF8  PPCMthid0                                hle\os\os_init.cpp
+8014910C -> 800F8C10  PPCMtdec                                 hle\os\os_init.cpp
+80149114 -> 800F8C18  PPCSync                                  hle\os\os_init.cpp
+80149130 -> 8000138C  PARKED (PPCMtmmcr0)                      hle\os\os_init.cpp
+80149138 -> 80001390  PARKED (PPCMtmmcr1)                      hle\os\os_init.cpp
+80149140 -> 80001394  PARKED (PPCMtpmc1)                       hle\os\os_init.cpp
+80149148 -> 80001398  PARKED (PPCMtpmc2)                       hle\os\os_init.cpp
+80149150 -> 800F8C3C  PPCMtpmc3                                hle\os\os_init.cpp
+80149158 -> 8000139C  PARKED (PPCMtpmc4)                       hle\os\os_init.cpp
+801491B0 -> 800013A0  PARKED (PPCMthid2)                       hle\os\os_init.cpp
+8026B3D0 -> 800013A4  PARKED (PARKED)                          (no
+801491B8 -> 800F8C50  PPCMtwpar                                hle\os\os_init.cpp
+801491C0 -> 800F8C58  PPCDisableSpeculation                    hle\os\os_init.cpp
+8026B414 -> 800013A8  PARKED (PARKED)                          (no
+8014D9B4 -> 80105BD4  OSDisableInterrupts                      hle\os\os_interrupt.cpp
+8014D9C8 -> 80105BE8  OSEnableInterrupts                       hle\os\os_interrupt.cpp
+8014D9DC -> 80105BFC  OSRestoreInterrupts                      hle\os\os_interrupt.cpp
+8014DA30 -> 80105C50  __OSInterruptInit                        hle\os\os_interrupt.cpp
+8014DAA4 -> 80105CC4  SetInterruptMask                         hle\os\os_interrupt.cpp
+8014987C -> 80103B28  OSExceptionInit                          hle\os\os_interrupt.cpp
+80172488 -> 800FAB58  EXIInit                                  hle\os\os_interrupt.cpp
+8014DD7C -> 80105F9C  __OSMaskInterrupts                       hle\os\os_interrupt.cpp
+80171E9C -> 800FA56C  EXISelect                                hle\os\os_interrupt.cpp
+80171FC8 -> 800FA698  EXIDeselect                              hle\os\os_interrupt.cpp
+80171240 -> 800F9924  SetExiInterruptMask                      hle\os\os_interrupt.cpp
+80276104 -> 800013B0  PARKED (PARKED)                          (no
+80171334 -> 800F9A18  EXIImm                                   hle\os\os_interrupt.cpp
+80171630 -> 800F9D14  EXIDma                                   hle\os\os_interrupt.cpp
+8017171C -> 800F9E00  EXISync                                  hle\os\os_interrupt.cpp
+80172750 -> 800FAD60  EXIUnlock                                hle\os\os_interrupt.cpp
+802950D0 -> 800013C0  PARKED (PARKED)                          (no
+802950C0 -> 800013C4  PARKED (PARKED)                          (no
+80295534 -> 800013C8  PARKED (PARKED)                          (no
+8014B5D4 -> 8001601C  OSReport                                 hle\os\os_report.cpp
+8014911C -> 800F8C20  PPCHalt                                  hle\os\os_reset.cpp
+8014B674 -> 80105834  OSPanic                                  hle\os\os_reset.cpp
+8014EA9C -> 80106AF0  OSResetSystem                            hle\os\os_reset.cpp
+801398C0 -> 800E60DC  exit                                     hle\os\os_reset.cpp
+80150160 -> 80107EE8  SelectThread                             hle\os\os_scheduler.cpp
+80150A94 -> 801087F4  OSWakeupThread                           hle\os\os_scheduler.cpp
+8027322C -> 800013D0  PARKED (PARKED)                          (no
+80273308 -> 800013D4  PARKED (PARKED)                          (no
+801509A8 -> 80108708  OSSleepThread                            hle\os\os_sleep.cpp
+80274EA0 -> 800013D8  PARKED (PARKED)                          (no
+8027510C -> 800013DC  PARKED (PARKED)                          (no
+801503F4 -> 80108154  OSCancelThread                           hle\os\os_thread.cpp
+801B5670 -> 800013E0  PARKED (PARKED)                          (no
+801B57C0 -> 800013E4  PARKED (PARKED)                          (no
+80150838 -> 80108598  OSSuspendThread                          hle\os\os_thread.cpp
+801505B0 -> 80108310  OSResumeThread                           hle\os\os_thread.cpp
+80150C44 -> 801088F8  OSGetTime                                hle\os\os_time.cpp
+80150C64 -> 80108918  __OSGetSystemTime                        hle\os\os_time.cpp
+8016326C -> 800013E8  PARKED (CARDInit)                        hle\storage\card_gc.cpp
+80163474 -> 800013EC  PARKED (CARDGetResultCode)               hle\storage\card_gc.cpp
+801634A4 -> 800013F0  PARKED (CARDFreeBlocks)                  hle\storage\card_gc.cpp
+80165BA8 -> 800013F4  PARKED (CARDCheckExAsync)                hle\storage\card_gc.cpp
+80166138 -> 800013F8  PARKED (CARDCheckAsync)                  hle\storage\card_gc.cpp
+8016622C -> 80134674  CARDProbeEx                              hle\storage\card_gc.cpp
+801668F0 -> 80134CFC  CARDMountAsync                           hle\storage\card_gc.cpp
+80166A90 -> 80001404  PARKED (CARDMount)                       hle\storage\card_gc.cpp
+80166B74 -> 80001408  PARKED (CARDUnmount)                     hle\storage\card_gc.cpp
+801673BC -> 8000140C  PARKED (CARDFormatAsync)                 hle\storage\card_gc.cpp
+80167878 -> 80001410  PARKED (CARDOpen)                        hle\storage\card_gc.cpp
+80167994 -> 80001414  PARKED (CARDClose)                       hle\storage\card_gc.cpp
+80167B20 -> 80001418  PARKED (CARDCreateAsync)                 hle\storage\card_gc.cpp
+80168028 -> 8000141C  PARKED (CARDReadAsync)                   hle\storage\card_gc.cpp
+8016838C -> 80001420  PARKED (CARDWriteAsync)                  hle\storage\card_gc.cpp
+80168544 -> 80001424  PARKED (CARDDeleteAsync)                 hle\storage\card_gc.cpp
+8016884C -> 80001428  PARKED (CARDGetStatus)                   hle\storage\card_gc.cpp
+80168960 -> 8000142C  PARKED (CARDSetStatusAsync)              hle\storage\card_gc.cpp
+80168AD4 -> 80001430  PARKED (CARDSetStatus)                   hle\storage\card_gc.cpp
+8015298C -> 8010F52C  DVDInit                                  hle\storage\dvd.cpp
+802793F0 -> 80001434  PARKED (PARKED)                          (no
+80152898 -> 8010F238  DVDReadAsyncPrio                         hle\storage\dvd.cpp
+80154574 -> 80110FCC  DVDReadAbsAsyncPrio                      hle\storage\dvd.cpp
+8027E308 -> 80001438  PARKED (PARKED)                          (no
+80152110 -> 8010E800  DVDLowInquiry                            hle\storage\dvd.cpp
+80151F54 -> 8010E644  DVDLowReadDiskID                         hle\storage\dvd.cpp
+801548B0 -> 80111318  DVDInquiryAsync                          hle\storage\dvd.cpp
+80154720 -> 80111244  DVDReadDiskID                            hle\storage\dvd.cpp
+80154E70 -> 801119E0  DVDCheckDisk                             hle\storage\dvd.cpp
+80154A10 -> 80111478  DVDGetDriveStatus                        hle\storage\dvd.cpp
+80151BFC -> 8010E2EC  DVDLowRead                               hle\storage\dvd.cpp
+8027EAC0 -> 8000143C  PARKED (PARKED)                          (no
+801D0980 -> 80001440  PARKED (PARKED)                          (no
+8027FA14 -> 80001444  PARKED (PARKED)                          (no
+80298CE8 -> 80001448  PARKED (PARKED)                          (no
+801DAA70 -> 8000144C  PARKED (PARKED)                          (no
+801DB140 -> 80001450  PARKED (PARKED)                          (no
+80297AAC -> 80001454  PARKED (PARKED)                          (no
+80297D2C -> 80001458  PARKED (PARKED)                          (no
+80297258 -> 8000145C  PARKED (PARKED)                          (no
+80297338 -> 80001460  PARKED (PARKED)                          (no
+801D8BD0 -> 80001464  PARKED (PARKED)                          (no
+801D9040 -> 80001468  PARKED (PARKED)                          (no
+801D84E0 -> 8000146C  PARKED (PARKED)                          (no
+80297010 -> 80001470  PARKED (PARKED)                          (no
+8019BBE0 -> 80001474  PARKED (PARKED)                          (no
+801D8FD0 -> 80001478  PARKED (PARKED)                          (no
+8019C380 -> 8000147C  PARKED (PARKED)                          (no
+801DAE70 -> 80001480  PARKED (PARKED)                          (no
+8015BC80 -> 80001484  PARKED (PARKED)                          (no
+8015BCF8 -> 80001488  PARKED (PARKED)                          (no
+80297BC4 -> 8000148C  PARKED (PARKED)                          (no
+80297D98 -> 80001490  PARKED (PARKED)                          (no
+802972C0 -> 80001494  PARKED (PARKED)                          (no
+802973A0 -> 80001498  PARKED (PARKED)                          (no
+80297418 -> 8000149C  PARKED (PARKED)                          (no
+8019C048 -> 800014A0  PARKED (PARKED)                          (no
+80297C3C -> 800014A4  PARKED (PARKED)                          (no
+8019D104 -> 800014A8  PARKED (PARKED)                          (no
+8019D720 -> 800014AC  PARKED (PARKED)                          (no
+80296F98 -> 800014B0  PARKED (PARKED)                          (no
+802975F4 -> 800014B4  PARKED (PARKED)                          (no
+80297198 -> 800014B8  PARKED (PARKED)                          (no
+80297914 -> 800014BC  PARKED (PARKED)                          (no
+802998F0 -> 800014C0  PARKED (PARKED)                          (no
+8019CB74 -> 800014C4  PARKED (PARKED)                          (no
+801D9950 -> 800014C8  PARKED (PARKED)                          (no
+8019CF28 -> 800014CC  PARKED (PARKED)                          (no
+801D9D10 -> 800014D0  PARKED (PARKED)                          (no
+8029837C -> 800014D4  PARKED (PARKED)                          (no
+80297E20 -> 800014D8  PARKED (PARKED)                          (no
+80296F20 -> 800014DC  PARKED (PARKED)                          (no
+802970C0 -> 800014E0  PARKED (PARKED)                          (no
+80299C94 -> 800014E4  PARKED (PARKED)                          (no
+802992C8 -> 800014E8  PARKED (PARKED)                          (no
+8029594C -> 800014EC  PARKED (PARKED)                          (no
+801938FC -> 800014F0  PARKED (PARKED)                          (no
+80295B2C -> 800014F4  PARKED (PARKED)                          (no
+80295CD4 -> 800014F8  PARKED (PARKED)                          (no
+80295EDC -> 800014FC  PARKED (PARKED)                          (no
+80225410 -> 80001500  PARKED (PARKED)                          (no
+802961FC -> 80001504  PARKED (PARKED)                          (no
+80293C70 -> 80001508  PARKED (PARKED)                          (no
+8029654C -> 8000150C  PARKED (PARKED)                          (no
+8019F1E0 -> 80001510  PARKED (PARKED)                          (no
+801619E4 -> 800F8E78  DSPCheckInit                             hle\audio\audio.cpp
+801619EC -> 800F8F18  DSPAddTask                               hle\audio\audio.cpp
+801618E4 -> 800F8D84  DSPCheckMailFromDSP                      hle\audio\audio.cpp
+801618F4 -> 800F8D94  DSPReadMailFromDSP                       hle\audio\audio.cpp
+802B6C80 -> 80001514  PARKED (PARKED)                          (no
+802B71E0 -> 80001518  PARKED (PARKED)                          (no
+8014FE70 -> 80107BF8  OSGetCurrentThread                       hle\os\os_context.cpp
+8017033C -> 801096FC  SIInit                                   hle\os\os_init.cpp
+801491A8 -> 800F8C34  PPCMfhid2                                hle\os\os_init.cpp
+8014DA00 -> 80105C20  __OSSetInterruptHandler                  hle\os\os_interrupt.cpp
+8014DE04 -> 80106024  __OSUnmaskInterrupts                     hle\os\os_interrupt.cpp
+802727DC -> 8000151C  PARKED (PARKED)                          (no
+8027283C -> 80001520  PARKED (PARKED)                          (no
+80272904 -> 80001524  PARKED (PARKED)                          (no
+801A7500 -> 80001528  PARKED (PARKED)                          (no
+801AACA8 -> 8000152C  PARKED (PARKED)                          (no
