@@ -3,6 +3,7 @@
 #include "ax_internal.h"
 
 #include "abi_bridge.h"
+#include <cmath>
 #include "audio_backend.h"
 #include "ax_mix_kernels.h"
 #include "isa/big_endian.h"
@@ -764,10 +765,18 @@ private:
 
     void GcOutputSamples(uint32_t lrAddr, uint32_t surroundAddr) {
         WriteGuestS32Buffer(surroundAddr, GcBus(kGcMainS), kGcAxSamplesPerFrame);
+        // Night of 100 Frights plays its movies at Bink volume 53230 (+4 dB) over audio mastered near full scale, so
+        // the mix overshoots 16 bits and hard clipping crackles. Bend the top quarter instead of cutting it off.
+        const auto limit = [](int32_t x) -> int16_t {
+            constexpr float knee = 24576.f, room = 32767.f - knee;
+            const float a = std::fabs(static_cast<float>(x));
+            if (a <= knee) return static_cast<int16_t>(x);
+            return static_cast<int16_t>(std::copysign(knee + room * std::tanh((a - knee) / room), static_cast<float>(x)));
+        };
         for (uint32_t i = 0; i < kGcAxSamplesPerFrame; ++i) {
             // AI frame order is right, left.
-            MixWrite16(lrAddr + i * 4, static_cast<uint16_t>(ClampS16(GcBus(kGcMainR)[i])));
-            MixWrite16(lrAddr + i * 4 + 2, static_cast<uint16_t>(ClampS16(GcBus(kGcMainL)[i])));
+            MixWrite16(lrAddr + i * 4, static_cast<uint16_t>(limit(GcBus(kGcMainR)[i])));
+            MixWrite16(lrAddr + i * 4 + 2, static_cast<uint16_t>(limit(GcBus(kGcMainL)[i])));
         }
     }
 
@@ -874,6 +883,14 @@ private:
         if (pb.running != 1) {
             return;
         }
+        // Diagnostic (env AX_VOICE_LOG): a running voice's setup every ~0.5 s.
+        if (static const bool log = std::getenv("AX_VOICE_LOG") != nullptr; log)
+            if (static unsigned n = 0; ++n % 500 == 0)
+                RT_LOGF(RT_TAG_AUDIO, "[axvoice] pb %04X%04X fmt %u loop %u stream %u src %u ratio %08X env %d+%d ctrl %04X main %u,%u auxA %u,%u auxB %u,%u lpf %u\n",
+                        pb.this_pb_hi, pb.this_pb_lo, pb.audio_addr.sample_format, pb.audio_addr.looping, pb.is_stream, pb.src_type,
+                        Hilo(pb.src.ratio_hi, pb.src.ratio_lo), pb.vol_env.cur_volume, pb.vol_env.cur_volume_delta, pb.mixer_control,
+                        pb.mixer.main_left.volume, pb.mixer.main_right.volume, pb.mixer.auxA_left.volume, pb.mixer.auxA_right.volume,
+                        pb.mixer.auxB_left.volume, pb.mixer.auxB_right.volume, pb.lpf.on);
         AcceleratorT<AXPBGc> accel;
         accel.Setup(&pb);
         std::array<int16_t, 32> samples{};

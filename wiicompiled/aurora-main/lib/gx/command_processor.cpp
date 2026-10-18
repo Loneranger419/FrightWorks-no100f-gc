@@ -2875,11 +2875,15 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
   const PnMtxUsage matrixUsage = interpolationIdentityActive
                                      ? pn_mtx_usage(vertices, vtxCount, vtxSize)
                                      : PnMtxUsage{};
-  if (g_spmProjWiden != 1.f && is_fullscreen_overlay_shape(prim, vtxCount) && g_gxState.tevStages[0].texMapId == GX_TEXMAP_NULL) {
+  if (g_spmProjWiden != 1.f && is_fullscreen_overlay_shape(prim, vtxCount)) {
     float e[7];
-    // full width and touching the top or bottom edge: fades and the cutscene letterbox bars
-    g_rawFullscreenOverlay = spm_draw_ndc_extent(fmt, vertices, vtxCount, vtxSize, true, e) && e[0] <= -0.99f &&
-                             e[2] >= 0.99f && (e[1] <= -0.99f || e[3] >= 0.99f);
+    const bool untextured = g_gxState.tevStages[0].texMapId == GX_TEXMAP_NULL;
+    // Full width and touching the top or bottom edge: fades and the cutscene letterbox bars. Textured, it must cover
+    // the whole screen and blend over it (the pause menu's dimming layer); opaque full-screen pictures keep 4:3.
+    g_rawFullscreenOverlay =
+        spm_draw_ndc_extent(fmt, vertices, vtxCount, vtxSize, true, e) && e[0] <= -0.99f && e[2] >= 0.99f &&
+        (untextured ? (e[1] <= -0.99f || e[3] >= 0.99f)
+                    : e[1] <= -0.99f && e[3] >= 0.99f && g_gxState.blendMode == GX_BM_BLEND && g_gxState.blendFacSrc == GX_BL_SRCALPHA);
   }
   handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
                        matrixUsage.mask, matrixUsage.topologySignature,

@@ -1369,6 +1369,7 @@ GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noex
 
 void resolve_sampled_textures(const ShaderInfo& info) noexcept {
   ZoneScoped;
+  if (gfx::texture_replacement::take_button_icon_style_change()) invalidate_static_texture_cache();
 
   for (u32 i = 0; i < MaxTextures; ++i) {
     if (!info.sampledTextures.test(i)) {
@@ -1995,7 +1996,8 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
   config.pixelFmt = g_gxState.pixelFmt;
   config.dstAlpha = effective_dst_alpha(g_gxState.pixelFmt, g_gxState.alphaUpdate, g_gxState.dstAlpha);
   config.depthCompare = g_gxState.depthCompare;
-  config.depthUpdate = g_gxState.depthUpdate;
+  // GX writes Z only when the Z test is on (Dolphin: "if the test is disabled write is disabled too").
+  config.depthUpdate = g_gxState.depthCompare && g_gxState.depthUpdate;
   config.alphaUpdate = effective_alpha_update(g_gxState.pixelFmt, g_gxState.alphaUpdate);
   config.colorUpdate = g_gxState.colorUpdate;
 }
@@ -2258,7 +2260,12 @@ static bool supports_wgpu_aniso(wgpu::FilterMode magFilter, wgpu::FilterMode min
 
 wgpu::SamplerDescriptor aurora::gfx::TextureBind::get_descriptor() const noexcept {
   auto [minFilter, mipFilter] = wgpu_filter_mode(texObj.min_filter());
-  const auto [magFilter, _] = wgpu_filter_mode(texObj.mag_filter());
+  auto [magFilter, _] = wgpu_filter_mode(texObj.mag_filter());
+  // The Bink movie frame (a full-screen RGBA8 picture) is set to nearest filtering: right at the console's 640x480,
+  // hard pixel blocks when scaled up to a modern screen. Filter it.
+  if (texObj.width() == 640 && texObj.height() >= 448 && texObj.format() == GX_TF_RGBA8 &&
+      magFilter == wgpu::FilterMode::Nearest)
+    magFilter = minFilter = wgpu::FilterMode::Linear;
   float minLod = texObj.min_lod();
   float maxLod = texObj.max_lod();
   if (ref && ref->isReplacement) {

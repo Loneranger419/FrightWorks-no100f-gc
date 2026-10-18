@@ -11,5 +11,5 @@ Keyboard: WASD move, arrows camera, Space A, Left Shift B, R X, F Y, C Z, Q/E L/
 
 Saves, settings and mods are in data\UserData. To update, unzip the new release over this folder.
 
-Credits: HD texture pack by dogerki (forums.dolphin-emu.org/Thread-scooby-doo-night-of-100-frights-hd-texture-pack-ai).
+Credits: HD texture pack by dogerki (forums.dolphin-emu.org/Thread-scooby-doo-night-of-100-frights-hd-texture-pack-ai). Button prompts: Kenney Input Prompts (CC0).
 Title font "Scooby Doo" by Lauren Ashpole (fontspace.com/scooby-doo-font-f7039).

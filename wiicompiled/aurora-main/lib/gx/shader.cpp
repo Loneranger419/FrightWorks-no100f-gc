@@ -1541,7 +1541,10 @@ wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept {
     }
     if (uvIn.empty()) {
       // No indirect texturing
-      const auto fixedUv = fixed_texcoord_name(static_cast<u32>(textureDependency.texCoordId));
+      // No texgens: GX samples at coordinate 0.
+      const auto fixedUv = textureDependency.texCoordId < 0
+                               ? std::string("vec2i(0)")
+                               : fixed_texcoord_name(static_cast<u32>(textureDependency.texCoordId));
       uvIn = fmt::format("vec2f(tev_s24_fixed_vec2i({0})) / (ubuf.tex{1}_size_bias.xy * 128.0)", fixedUv,
                          textureDependency.texMapId);
     }

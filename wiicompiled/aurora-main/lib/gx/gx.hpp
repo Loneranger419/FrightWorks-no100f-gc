@@ -696,7 +696,8 @@ inline TevStageTextureDependency tev_stage_texture_dependency(const ShaderConfig
       .needsFixedTexcoordState = tev_stage_needs_fixed_texcoord_state(config, stageIdx),
       .combinerUsesTexture = tev_stage_combiner_uses_texture(stage),
   };
-  dependency.canSampleTexture = dependency.texCoordId >= 0 && dependency.texMapId >= 0;
+  // With no texgens GX still samples the stage's texture, at coordinate 0 (Dolphin does the same).
+  dependency.canSampleTexture = dependency.texMapId >= 0 && (dependency.texCoordId >= 0 || config.numTexGens == 0);
   return dependency;
 }
 

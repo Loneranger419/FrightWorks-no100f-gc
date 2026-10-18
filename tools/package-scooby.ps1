@@ -26,6 +26,10 @@ function Stage([string]$to) {
     Remove-Item -Recurse -Force $pack -ErrorAction SilentlyContinue
     New-Item -ItemType Directory -Force (Split-Path $pack) | Out-Null
     Copy-Item -Recurse "$root\texture_pack\ScoobyHD" $pack
+    # Button prompts for the controller in use, drawn from tools\button-art over the HD pack's layout.
+    Remove-Item -Recurse -Force "$to\data\UserData\button_icons" -ErrorAction SilentlyContinue
+    python "$root\tools\make-button-icons.py" --out "$to\data\UserData\button_icons"
+    if ($LASTEXITCODE -ne 0) { throw "make-button-icons.py failed" }
 }
 
 $dist = "$root\dist\ScoobyDooRefrightened"

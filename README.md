@@ -6,8 +6,9 @@ with [WiiCompiled](https://github.com/patchzyy/Wiicompiled). No emulator.
 ![Mystic Manor in widescreen at 4K](docs/screenshots/courtyard.jpg)
 
 <p>
-  <img src="docs/screenshots/cinematic.jpg" width="49%" alt="Cinematic 2.39:1">
-  <img src="docs/screenshots/menu.jpg" width="49%" alt="Main menu in widescreen">
+  <img src="docs/screenshots/cinematic.jpg" width="32%" alt="Cinematic 2.39:1">
+  <img src="docs/screenshots/menu.jpg" width="32%" alt="Main menu in widescreen">
+  <img src="docs/screenshots/pause-ultrawide.jpg" width="32%" alt="Pause menu at 21:9 with Xbox button prompts">
 </p>
 
 ## Features
@@ -15,7 +16,8 @@ with [WiiCompiled](https://github.com/patchzyy/Wiicompiled). No emulator.
 - Up to 4K, true widescreen (16:9, fill, cinematic 2.39:1) or original 4:3
 - 30 or 60 fps, MSAA anti-aliasing, HDR
 - Built-in HD texture pack (can be switched off)
-- Gamepads and keyboard, remappable; GameCube memory-card saves
+- Gamepads and keyboard, remappable; button prompts match your Xbox, PlayStation or Nintendo controller
+- GameCube memory-card saves
 - Option to skip the intro movies; mods that replace game files or textures
 
 **No game data is included.** You need your own disc image.
@@ -54,6 +56,7 @@ The game builds to `Play\`; the package goes to `dist\`. Packaging expects the H
   (MIT); other components in [`wiicompiled/THIRD-PARTY-NOTICES.md`](wiicompiled/THIRD-PARTY-NOTICES.md)
 - HD texture pack by **dogerki**
   ([Dolphin forums](https://forums.dolphin-emu.org/Thread-scooby-doo-night-of-100-frights-hd-texture-pack-ai))
+- Button prompts from [Kenney's Input Prompts](https://kenney.nl/assets/input-prompts) (CC0)
 - Launcher font "Scooby Doo" by Lauren Ashpole ([FontSpace](https://www.fontspace.com/scooby-doo-font-f7039))
 
 ## License

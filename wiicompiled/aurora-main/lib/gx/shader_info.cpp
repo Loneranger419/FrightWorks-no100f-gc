@@ -137,7 +137,7 @@ void mark_texture_sample(const TevStageTextureDependency& dependency, ShaderInfo
   if (!dependency.canSampleTexture) {
     return;
   }
-  info.sampledTexCoords.set(static_cast<size_t>(dependency.texCoordId));
+  if (dependency.texCoordId >= 0) info.sampledTexCoords.set(static_cast<size_t>(dependency.texCoordId));
   info.sampledTextures.set(static_cast<size_t>(dependency.texMapId));
 }
 

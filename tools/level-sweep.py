@@ -1,7 +1,7 @@
 """Boot every level of Scooby-Doo! Night of 100 Frights straight in (sd2.ini BOOT=<level>, ShowMenuOnBoot=0, through
 a mod), skip its opening cutscene, run it, then save a window screenshot and the log, and report faults.
 
-    python tools/level-sweep.py [--levels h001,c003] [--seconds 30] [--workers 3]
+    python tools/level-sweep.py [--levels h001,c003] [--seconds 30] [--workers 7]
 
 Output: autotest/level-sweep-<time>/ with REPORT.md, results.json, shots/<level>.png and logs/<level>.err.log.
 Each worker runs its own copy of Play/ (so the per-level mod and the settings don't collide), windowed 1280x720.
@@ -35,6 +35,14 @@ def make_worker(base: Path, n: int) -> Path:
     return w
 
 
+def blank_shot(png: Path) -> bool:
+    """No picture: the capture is missing or almost entirely black."""
+    if not png.exists():
+        return True
+    from PIL import Image, ImageStat
+    return max(ImageStat.Stat(Image.open(png).convert("L")).extrema[0]) < 16
+
+
 def run_level(w: Path, level: str, seconds: float, out: Path) -> dict:
     ini = (DISC / "sd2.ini").read_text(encoding="latin-1")
     ini = re.sub(r"(?m)^BOOT=.*$", f"BOOT={level}", ini)
@@ -63,7 +71,8 @@ def run_level(w: Path, level: str, seconds: float, out: Path) -> dict:
         "exit": None if alive else p.returncode,
         "faults": text.count("AccessViolation"),
         "panic": bool(re.search(r"OS panic|missing_target|Unhandled|FATAL", text)),
-        "watchdog": "nothing visible yet" in text,
+        # judged from the shot: the runtime's "nothing visible yet" dump fires at 30 s regardless
+        "watchdog": blank_shot(out / "shots" / f"{level}.png"),
         "fps_min": min(fps) if fps else 0.0,
         "fps_last": fps[-1] if fps else 0.0,
     }
@@ -73,7 +82,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--levels", default="")
     ap.add_argument("--seconds", type=float, default=30)
-    ap.add_argument("--workers", type=int, default=3)
+    ap.add_argument("--workers", type=int, default=7)
     a = ap.parse_args()
     levels = a.levels.split(",") if a.levels else all_levels()
     out = ROOT / "autotest" / time.strftime("level-sweep-%Y%m%d-%H%M%S")
