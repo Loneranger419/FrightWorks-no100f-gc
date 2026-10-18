@@ -1,7 +1,8 @@
 # Scooby-Doo: Refrightened
 
-A native PC port of **Scooby-Doo! Night of 100 Frights** (GameCube, 2002), statically recompiled from PowerPC to C++
-with [WiiCompiled](https://github.com/patchzyy/Wiicompiled). No emulator.
+A statically recompiled PC port of **Scooby-Doo! Night of 100 Frights** (GameCube, 2002). The game's PowerPC code is
+translated ahead of time to C++ with [WiiCompiled](https://github.com/patchzyy/Wiicompiled) and compiled into a Windows
+program, so there is no CPU emulator; the console's graphics, audio and system calls are reimplemented underneath.
 
 ![Mystic Manor in widescreen at 4K](docs/screenshots/courtyard.jpg)
 
