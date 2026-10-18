@@ -50,6 +50,9 @@ struct RuntimeUserConfig {
     std::optional<bool> textureReplacements;
     std::optional<bool> textureDumps;
     std::optional<bool> showFps;
+    std::optional<bool> skipIntro;
+    std::optional<bool> fps60;
+    std::optional<uint32_t> msaa;
     std::optional<bool> spinningCoins;  // NSMBW: [video] spinning_coins, animated tiles
     std::optional<bool> frameGraph;     // NSMBW: [video] frame_graph, frame times under the FPS counter
     std::optional<bool> hdr;             // [video] hdr: scRGB HDR output (startup only)
@@ -399,6 +402,8 @@ inline void EnsureConfigFile() {
               "resolution_multiplier = 2.25\n"
               "# 0 (off), 120 or 180\n"
               "frame_interpolation_fps = 0\n"
+              "# true = 60 fps (the game times itself by the clock, so it keeps its speed)\n"
+              "fps60 = false\n"
               "# 0 = original 4:3, 1 = 16:9, 2 = fill the screen, 3 = cinematic 2.39:1\n"
               "aspect_mode = 3\n"
               "display_mode = \"borderless\"\n"
@@ -586,6 +591,11 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.skipUnreadyPipelines = FindConfigValue<bool>(document, "video", "skip_unready_pipelines");
     config.disableCopyFilter = FindConfigValue<bool>(document, "video", "disable_copy_filter");
     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
+    config.skipIntro = FindConfigValue<bool>(document, "video", "skip_intro");
+    config.fps60 = FindConfigValue<bool>(document, "video", "fps60");
+    if (auto value = FindConfigUint(document, "video", "msaa"); value && (*value == 1 || *value == 2 || *value == 4 || *value == 8)) {
+        config.msaa = *value;
+    }
     config.spinningCoins = FindConfigValue<bool>(document, "video", "spinning_coins");
     config.frameGraph = FindConfigValue<bool>(document, "video", "frame_graph");
     config.vsync = FindConfigValue<bool>(document, "video", "vsync");
@@ -1133,6 +1143,20 @@ inline bool SkipUnreadyPipelines(bool fallback = true) {
 
 inline bool DisableCopyFilter(bool fallback = true) {
     return Get().disableCopyFilter.value_or(fallback);
+}
+
+// Multisample anti-aliasing samples (1 = off, 2, 4 or 8); applies at the next start.
+inline uint32_t Msaa(uint32_t fallback = 1) {
+    return Get().msaa.value_or(fallback);
+}
+
+// NO100F: end the boot logo movies and the intro movie after their first frame (launcher "Skip intro movies").
+inline bool Fps60(bool fallback = false) {
+    return Get().fps60.value_or(fallback);
+}
+
+inline bool SkipIntro(bool fallback = false) {
+    return Get().skipIntro.value_or(fallback);
 }
 
 inline bool ShowFps(bool fallback = true) {

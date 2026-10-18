@@ -800,7 +800,8 @@ void ShowRuntimeFatalPopup(std::string_view category, std::string_view details) 
     if (g_fatalPopupShown.exchange(true, std::memory_order_acq_rel)) {
         return;
     }
-    if (std::getenv("SPM_MAP_SWEEP_FILE")) {
+    // NO100F_NO_POPUP: automated runs (tools/level-sweep.py) log the fatal error instead of opening a window.
+    if (std::getenv("SPM_MAP_SWEEP_FILE") || std::getenv("NO100F_NO_POPUP")) {
         RT_LOGF(RT_TAG_RUNTIME, "[spmsweep] fatal %.*s: %.*s\n", static_cast<int>(category.size()), category.data(),
                 static_cast<int>(details.size()), details.data());
         return;
@@ -1498,6 +1499,7 @@ int RuntimeMain(int argc, char** argv) {
             auroraConfig.windowPosX, auroraConfig.windowPosY);
         auroraConfig.allowJoystickBackgroundEvents = true;
         auroraConfig.disableCopyFilter = RuntimeConfigFile::DisableCopyFilter(true);
+        auroraConfig.msaa = RuntimeConfigFile::Msaa(1);
         // Dolphin-style custom textures. Aurora indexes <userPath>/texture_replacements
         // once during aurora_initialize, so both knobs only take effect on the next launch.
         // Dumps name each unmatched texture the way its replacement would have to be named,

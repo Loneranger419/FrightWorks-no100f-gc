@@ -20,6 +20,12 @@ function Stage([string]$to) {
     foreach ($f in 'Scooby-Doo Refrightened.exe', '*.dll', 'dsp_coef.bin', 'initial_pipeline_cache.db', 'portable.txt') {
         if (Test-Path "$root\Play\$f") { Copy-Item "$root\Play\$f" "$to\data" -Force }
     }
+    # Built-in HD texture pack (texture_pack\ScoobyHD, kept out of git): replaced whole on every update.
+    $pack = "$to\data\UserData\texture_replacements\ScoobyHD"
+    if (-not (Test-Path "$root\texture_pack\ScoobyHD")) { throw "texture_pack\ScoobyHD is missing (the built-in HD texture pack)" }
+    Remove-Item -Recurse -Force $pack -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force (Split-Path $pack) | Out-Null
+    Copy-Item -Recurse "$root\texture_pack\ScoobyHD" $pack
 }
 
 $dist = "$root\dist\ScoobyDooRefrightened"

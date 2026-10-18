@@ -1,3 +1,4 @@
+#include <bit>
 #include <vector>
 #include "frame_input.h"
 #include "det_hash.h"
@@ -1344,6 +1345,9 @@ extern "C" void VIGetRetraceCount_HLE_801baba4(CpuContext* ctx)
         EnsureInitializedLocked();
         count = g_vi.retraceCount;
     }
+    // NO100F 60 fps ([video] fps60): the main loop (0x800AD68C) waits until two retraces passed since the last
+    // frame; counting double for that caller makes it wait one. The game steps by the measured frame time.
+    if (static const bool fps60 = RuntimeConfigFile::Fps60(); fps60 && ctx->lr == 0x800AD690u) count *= 2;
     ViSetR3(ctx, count);
     VI_HLE_PollRetrace(ctx);
 }
@@ -1400,7 +1404,6 @@ PPC_NATIVE_OVERRIDE_VOID(8010BF20, VIGetCurrentLine_HLE_801bac48, (CpuContext* c
 extern "C" void VIWaitForRetrace_HLE_801b99ec(CpuContext* ctx)
 {
     CpuContext* cpu = ctx ? ctx : &GetPersistentCpuContext();
-    
     if (Fiber::GuestFiberManager::IsInitialized()) {
         const int32_t irqState = OS__DisableInterrupts_801a65ac();
         uint32_t retraceCount = 0;

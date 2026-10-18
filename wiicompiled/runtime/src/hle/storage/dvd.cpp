@@ -1076,6 +1076,24 @@ extern "C" int32_t DVDReadPrio_8015E834(uint32_t fileInfoPtr, uint32_t bufferPtr
     }
     tempBuf.resize(requested, 0);
     uLength = requested;
+    // Skip intro: the boot logos and the intro movie report a single frame (Bink header, frame count at 0x08 and
+    // 0x10), so the game's own player ends them at once. Only their first showing per launch (the title screen's
+    // idle loop replays the intro); story cutscenes are untouched.
+    if (uOffset == 0 && uLength >= 0x14 && RuntimeConfigFile::SkipIntro()) {
+        const std::string path = HostPathText(entry.hostPath);
+        static constexpr const char* kIntroMovies[] = {"WBLogo.bik", "THQLogo.bik", "HILogo.bik", "RW4.bik", "Intro.bik"};
+        static bool skipped[std::size(kIntroMovies)] = {};
+        for (size_t m = 0; m < std::size(kIntroMovies); ++m) {
+            const char* name = kIntroMovies[m];
+            if (!skipped[m] && path.size() >= std::strlen(name) && path.compare(path.size() - std::strlen(name), std::string::npos, name) == 0 &&
+                std::memcmp(tempBuf.data(), "BIK", 3) == 0) {
+                skipped[m] = true;
+                const uint8_t one[4] = {1, 0, 0, 0};
+                std::memcpy(tempBuf.data() + 0x08, one, 4);
+                std::memcpy(tempBuf.data() + 0x10, one, 4);
+            }
+        }
+    }
 
     CopyToGuestAsDma(bufferPtr, tempBuf.data(), uLength);
 

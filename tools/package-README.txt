@@ -1,22 +1,15 @@
-SCOOBY-DOO: REFRIGHTENED
-A PC port of Scooby-Doo! Night of 100 Frights (GameCube, USA) with true widescreen and up to 4K. Made by JosiahG.
+SCOOBY-DOO: REFRIGHTENED - a PC port of Scooby-Doo! Night of 100 Frights by JosiahG
 
-You need your own copy of the game: a dump of the USA GameCube disc, version 1.01 (GIHE78, revision 1), as a
-.iso, .gcm or .ciso file. No game data is included.
+Needs your own GameCube disc image: USA v1.01 (GIHE78, revision 1), .iso/.gcm/.ciso. No game data is included.
 
-1. Run "Scooby-Doo Refrightened.exe". It's the only program you need to open.
-2. On the Play page choose your disc image. The game files are copied into the data folder once
-   (the image file is not needed afterwards).
-3. Pick display options on the Display page, then press PLAY.
+1. Open "Scooby-Doo Refrightened.exe".
+2. Choose your disc image on the Play page, then press PLAY.
 
-In game: F10 = settings menu (resolution, picture shape, controls, audio), F11 = fullscreen / window.
-Keyboard: WASD move, arrows camera, Space A, Left Shift B, R X, F Y, C Z, Q/E L/R, Enter Start, I J K L D-pad.
-Gamepads work right away.
+Display page: resolution, widescreen, 60 fps, anti-aliasing, HD textures, skip intro.
+In game: F10 = settings, F11 = fullscreen / window. Gamepads work right away.
+Keyboard: WASD move, arrows camera, Space A, Left Shift B, R X, F Y, C Z, Q/E L/R, Enter Start, IJKL D-pad.
 
-The game runs at 30 fps, as it did on the GameCube.
+Saves, settings and mods are in data\UserData. To update, unzip the new release over this folder.
 
-The data folder holds the game, your disc files, saves (data\UserData\Saves) and settings.
-Mods go in data\UserData\mods (see the launcher's Mods page). Updating: copy the new download over this
-folder; your disc, saves and settings are kept.
-
-Credits: title font "Scooby Doo" by Lauren Ashpole (fontspace.com/scooby-doo-font-f7039), free for personal use.
+Credits: HD texture pack by dogerki (forums.dolphin-emu.org/Thread-scooby-doo-night-of-100-frights-hd-texture-pack-ai).
+Title font "Scooby Doo" by Lauren Ashpole (fontspace.com/scooby-doo-font-f7039).
