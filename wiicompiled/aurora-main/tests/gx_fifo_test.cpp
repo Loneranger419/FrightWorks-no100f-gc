@@ -2336,14 +2336,14 @@ TEST_F(GXFifoTest, InvalidateTexAll_EmitsAuroraCacheInvalidationAndDirtiesState)
   EXPECT_TRUE(gxState().stateDirty);
 }
 
-TEST_F(GXFifoTest, TexObjRawDimensions_WrapAtTenBitBoundary) {
+TEST_F(GXFifoTest, TexObjRawDimensions_Image0TenBitsDecodeTo1024) {
   auto& slot = gxState().loadedTextures[GX_TEXMAP0];
   slot.image0 = (0x3FFu << 0) | (0x3FFu << 10);
   slot.mWidth = 0;
   slot.mHeight = 0;
 
-  EXPECT_EQ(slot.width(), 0u);
-  EXPECT_EQ(slot.height(), 0u);
+  EXPECT_EQ(slot.width(), 1024u);
+  EXPECT_EQ(slot.height(), 1024u);
 }
 
 TEST_F(GXFifoTest, TexObjExplicitDimensions_DoNotWrapAtTenBitBoundary) {

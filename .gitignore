@@ -36,3 +36,15 @@ texture_pack/
 
 # notes for development sessions, not part of the project
 AGENTS.md
+
+# local disc images (never commit)
+*.iso
+*.ciso
+*.wbfs
+*.gcm
+*.rvz
+
+# issue #2 investigation leftovers (use tools/manual-session.ps1 locally; do not commit)
+tools/_retired_auto/
+tools/_score_verify_shots.py
+tools/manual-session.ps1

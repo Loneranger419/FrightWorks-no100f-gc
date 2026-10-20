@@ -3301,6 +3301,36 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
     ranges.vaRanges[i - GX_VA_POS] = array.cachedRange;
   }
 
+  // Issue #2: guest BP GEN_MODE / XF 0x3F can leave numTexGens==0 while TEV still samples and
+  // VCD still has TEX. The shader then samples at UV (0,0) → solid floors/walls. Prefer TEV+VCD.
+  if (g_gxState.numTexGens == 0) {
+    u8 need = 0;
+    for (u8 si = 0; si < g_gxState.numTevStages && si < MaxTevStages; ++si) {
+      const auto& st = g_gxState.tevStages[si];
+      if (st.texMapId == GX_TEXMAP_NULL || !tev_stage_combiner_uses_texture(st)) {
+        continue;
+      }
+      const u32 c = underlying(st.texCoordId);
+      need = std::max<u8>(need, c < MaxTexCoord ? static_cast<u8>(c + 1u) : u8{1});
+    }
+    if (need > 0) {
+      bool hasTexAttr = false;
+      for (int a = GX_VA_TEX0; a <= GX_VA_TEX7; ++a) {
+        if (g_gxState.vtxDesc[a] != GX_NONE) {
+          hasTexAttr = true;
+          break;
+        }
+      }
+      const auto src0 = g_gxState.tcgs[0].src;
+      const bool hasTcgSrc = (src0 >= GX_TG_TEX0 && src0 <= GX_TG_TEX7) || src0 == GX_TG_POS ||
+                             src0 == GX_TG_NRM || src0 == GX_TG_COLOR0;
+      if (hasTexAttr || hasTcgSrc) {
+        g_gxState.numTexGens = need;
+        mark_pipeline_state_dirty();
+      }
+    }
+  }
+
   const auto& pipelineState = resolve_pipeline_state(prim, fmt);
   const auto& info = pipelineState.shaderInfo;
 
