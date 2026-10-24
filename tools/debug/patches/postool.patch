@@ -1,5 +1,5 @@
 diff --git a/wiicompiled/runtime/src/hle/vi.cpp b/wiicompiled/runtime/src/hle/vi.cpp
-index c9d68ec..7928dbb 100644
+index c9d68ec..8e1e7d9 100644
 --- a/wiicompiled/runtime/src/hle/vi.cpp
 +++ b/wiicompiled/runtime/src/hle/vi.cpp
 @@ -32,6 +32,11 @@
@@ -14,7 +14,7 @@ index c9d68ec..7928dbb 100644
  #include <iostream>
  #include <mutex>
  #include <thread>
-@@ -1337,8 +1342,177 @@ extern "C" void VISetBlack_HLE_801bab2c(CpuContext* ctx)
+@@ -1337,8 +1342,186 @@ extern "C" void VISetBlack_HLE_801bab2c(CpuContext* ctx)
  }
  PPC_NATIVE_OVERRIDE_VOID(8010BD8C, VISetBlack_HLE_801bab2c, (CpuContext* ctx), (ctx));
  
@@ -81,18 +81,20 @@ index c9d68ec..7928dbb 100644
 +
 +//   births SECONDS       particle births per owner emitter asset (pool 2000 x 0x50 at 0x80210858: +8 life, +0x3C owner)
 +//                        for SECONDS of wall time to postool/births.txt; "p1" = asset also emitted via the per-frame
-+//                        update 0x800C4AAC (set by no100f_particles.cpp)
-+std::unordered_set<uint32_t> g_no100fPath1Assets;
++//                        update 0x800C4AAC (set by no100f_particles.cpp); "p2" = also via 0x800C5C0C (probe in that override);
++//                        "vel" = mean |velocity| at birth (MOVE adds it to the position every frame), speed = vel x frames/s
++std::unordered_set<uint32_t> g_no100fPath1Assets, g_no100fPath2Assets;
 +static void No100fPosToolBirths(double seconds)
 +{
 +    struct Slot { float life = 0; uint32_t owner = 0; };
 +    static std::vector<Slot> prev;
 +    static std::unordered_map<uint32_t, uint64_t> births;
++    static std::unordered_map<uint32_t, double> velSum;
 +    static std::chrono::steady_clock::time_point until{}, start{};
 +    static uint64_t frames = 0;
 +    const auto now = std::chrono::steady_clock::now();
 +    if (seconds > 0) {
-+        prev.clear(); births.clear(); frames = 0;
++        prev.clear(); births.clear(); velSum.clear(); frames = 0;
 +        start = now;
 +        until = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(seconds));
 +    }
@@ -108,7 +110,12 @@ index c9d68ec..7928dbb 100644
 +        bool changed = false;
 +        for (uint32_t i = 0; i < 2000; ++i) {
 +            if (cur[i].life != prev[i].life || cur[i].owner != prev[i].owner) changed = true;
-+            if (cur[i].owner && (cur[i].owner != prev[i].owner || cur[i].life > prev[i].life + 1e-4f)) ++births[cur[i].owner];
++            if (cur[i].owner && (cur[i].owner != prev[i].owner || cur[i].life > prev[i].life + 1e-4f)) {
++                ++births[cur[i].owner];
++                const uint32_t p = 0x80210858u + i * 0x50u;
++                const float vx = Memory::ReadFloat32(p + 0x20), vy = Memory::ReadFloat32(p + 0x24), vz = Memory::ReadFloat32(p + 0x28);
++                velSum[cur[i].owner] += std::sqrt(vx * vx + vy * vy + vz * vz);
++            }
 +        }
 +        if (changed) ++frames;
 +    }
@@ -123,8 +130,10 @@ index c9d68ec..7928dbb 100644
 +    for (const auto& [owner, n] : births) {
 +        uint32_t id = 0;
 +        Memory::TryRead32(owner, id);
-+        std::snprintf(b, sizeof b, "owner %08X id %08X births %llu (%.1f/s)%s\n", owner, id, (unsigned long long)n, n / secs,
-+                      g_no100fPath1Assets.count(owner) ? " p1" : "");
++        const double vel = velSum[owner] / n;
++        std::snprintf(b, sizeof b, "owner %08X id %08X births %llu (%.1f/s) vel %.5f speed %.3f/s%s%s\n", owner, id,
++                      (unsigned long long)n, n / secs, vel, vel * frames / secs, g_no100fPath1Assets.count(owner) ? " p1" : "",
++                      g_no100fPath2Assets.count(owner) ? " p2" : "");
 +        out << b;
 +    }
 +}

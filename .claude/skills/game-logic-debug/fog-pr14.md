@@ -18,8 +18,28 @@
   30 fps in `i004`, `i001`, `e001`, `h002` (torches 419.5/s both). Smoke `i001`, `h001`, `i004`. Human visual: fixed. PR body has
   before/after `.mp4`.
 
-Not fixed (path 2, next): `fn_800C5C0C` ("emit with overrides", ~90 entity callers). Continuous users still ~2x at 60 fps:
-`PAREMIT_SMALL_VAN_PUFF` 2.0x (`i004`, `h002`), `PAREMIT_CHAND_CANDLE` 1.4–2.4x (`i001`, `i004`), `PAREMIT_FIREWORKS_TRAIL` 2.5x
-(`h002`). Not near pool exhaustion in the levels measured. Rain/snow (`PAREMIT_RAIN`/`SNOW`, code-driven) not measured. It also
-fires one-shot bursts, so the same accumulate-dt trick must not drop or delay those: plan is "once per 30 Hz step of game time"
-only for emitters with interval < 1/30, keyed per emitter.
+**PR #14 bug found later (2026-10-24, path-2 work):** passing the *summed* dt doubles particle speed. Emit sets
+velocity = asset velocity x dt and MOVE (`0x800C38F0`, PARS command 3) adds velocity to position every frame, no dt.
+`births` speed column: every p1 emitter 2.00x at 60 fps (torch flames twice as tall, seen by the human in i004). Also the
+gate skipped timer-driven emitters (interval > 0) too. Fix `132da75` on `fix/fog-fps60`: gate only when the emitter timer
++0x1C <= 0 (emits every call), at most once per 30 Hz step, and pass this frame's dt -> all p1 1.00x count and speed in
+i004/i001/e001/h002; grate flash frames 1/219 (30 fps baseline 3/171). Smoke i001/h001/h002/i004.
+
+## Path 2 — `fix/particles-fps60-path2` `212643d` (off `main`)
+
+- `0x800C5C0C` native in full (`hle/no100f_particles_entity.cpp`): applies overrides (flags word at ov+0, bits mapped in
+  the file), optional save/restore (flag 0x4000, save area `0x802486A0`), emit, restore. Callers: 89 sites; 36 pass a fixed
+  1/30 (sda2 `0x3D088889`) instead of frame dt -> 2x speed at 60 fps (`PAREMIT_CHAND_CANDLE`), plus 2x count for timer-0
+  emitters (`SMALL_VAN_PUFF`, `FIREWORKS_TRAIL`, chandelier candles).
+- Fix (fps60 only): dt == 1/30 -> frame time `[0x80270D84]` (r13-0x74FC, clamped 1/60..0.1); if timer <= 0, per emitter skip
+  the emit when it emitted in the previous frame (`[0x80270890]` frame counter, r13-0x79F0) unless that frame was a full
+  30 Hz step. Same-frame calls all emit (chandeliers: 16 calls/frame on one emitter). Bursts never dropped (probe: every
+  firework burst a 1-frame streak, skipped 0).
+- Result: VAN_PUFF 0.96-1.01x, FIREWORKS_TRAIL 0.75-0.91x (random launch timing), CHAND_CANDLE speed 2.00x -> 1.00x.
+  Tried a shared global 30 Hz phase for path 1+2: no measurable difference, dropped (keeps the two files independent).
+- Probes: `patches/particles-path2-probes.patch` (p2 tag, per-asset call streaks / skips / caller lr+flags / avg system
+  population -> `postool/streaks.txt`; `births-run.ps1` copies extra postool txt files).
+- `births` is wrong for `PAREMIT_CHAND_CANDLE` (13 "births"/s but ~0.6 alive with 0.75 s life): use the population probe.
+  i004 CHAND_CANDLE at 60 fps ~0 on every build including `main` (pre-existing).
+- Not measured: rain/snow (`PAREMIT_RAIN`/`SNOW`, holiday/code-driven); `PAREMIT_SD_FLEASCRATCH` interval 0.01 < 1/60 is
+  timer-driven so not gated (still ~2x at 60 fps, tiny).

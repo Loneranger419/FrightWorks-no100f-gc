@@ -61,7 +61,7 @@ Every 20 main-loop frames it runs the lines in `Play/postool.txt`, then deletes 
 | `peek ADDR [N]` | N words → `peek.txt` |
 | `poke ADDR HEX...` | write words (floats as hex) |
 | `trace ADDR N` | N frames of the list whose head is `[ADDR]`: length + first 4 particles → `trace.txt` |
-| `births SECONDS` | particle births per owner emitter asset → `births.txt` (`p1` tag only with a probe line in the emitter override) |
+| `births SECONDS` | particle births + birth speed per owner emitter asset → `births.txt` (`p1`/`p2` tags only with probe lines in the overrides) |
 
 ## Measuring flicker (`tools/debug/capture/`)
 
@@ -80,7 +80,9 @@ Every 20 main-loop frames it runs the lines in `Play/postool.txt`, then deletes 
   - Emit `fn_800C4B04(emitter r3, dt f1)`: timer at +0x1C; when ≤ 0 emits `asset+0xA` ± `asset+0xB` and resets to `asset+0xC`.
     Interval 0 = emits on **every call** (256 of 433 disc emitters; mostly one-shots).
   - Callers: `fn_800C4AAC` per-frame update (pause check `fn_800AD3B4`, enabled bit +0x18; called from `fn_800CE760`) —
-    fixed by PR #14. `fn_800C5C0C` "emit with overrides", ~90 entity-code callers — **not fixed** (see AGENTS.md open thread).
+    fixed by PR #14. `fn_800C5C0C` "emit with overrides", 89 entity-code callers — `fix/particles-fps60-path2` (`fog-pr14.md`).
+  - Emit sets particle velocity = asset velocity x dt; MOVE adds it every frame (no dt). So dt passed to emit must be the
+    real frame time: a summed or fixed 1/30 dt doubles particle speed at 60 fps. `births` prints `speed` to check this.
 - **HIP assets** (`audio/hip.py` lists, `game/mkhip.py` has an `assets()` walker): xEntAsset pos at +0x1C; PLYR yaw at +0x10.
   PARE +9 type, +0xA count, +0xB variance, +0xC interval, +0x30 PARS ID. PARS +0xC parent, +0x16 maxPar.
 - Scooby's model matrix (xMat4x3: right, up, at, pos) at `[0x802453C8]`; yaw = `atan2(at.x, at.z)`.

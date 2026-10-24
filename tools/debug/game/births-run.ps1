@@ -36,6 +36,8 @@ try {
       Start-Sleep 1
       if (Test-Path Play\postool\births.txt) { Copy-Item Play\postool\births.txt "$out\$lvl-fps60$fps.txt" -Force; "$lvl fps60=$fps : ok" }
       else { "$lvl fps60=$fps : no births.txt" }
+      # extra probe output from overrides, if any (e.g. streaks.txt)
+      Get-ChildItem Play\postool\*.txt -Exclude births.txt, done.txt -ErrorAction SilentlyContinue | ForEach-Object { Copy-Item $_.FullName "$out\$lvl-fps60$fps-$($_.Name)" -Force }
       powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 shot -Label "births-$lvl-fps60$fps" | Out-Null
       Stop-Game
     }
