@@ -41,5 +41,5 @@ i004/i001/e001/h002; grate flash frames 1/219 (30 fps baseline 3/171). Smoke i00
   population -> `postool/streaks.txt`; `births-run.ps1` copies extra postool txt files).
 - `births` is wrong for `PAREMIT_CHAND_CANDLE` (13 "births"/s but ~0.6 alive with 0.75 s life): use the population probe.
   i004 CHAND_CANDLE at 60 fps ~0 on every build including `main` (pre-existing).
-- Not measured: rain/snow (`PAREMIT_RAIN`/`SNOW`, holiday/code-driven); `PAREMIT_SD_FLEASCRATCH` interval 0.01 < 1/60 is
-  timer-driven so not gated (still ~2x at 60 fps, tiny).
+- Not measured: rain/snow (`PAREMIT_RAIN`/`SNOW`, holiday/code-driven); `PAREMIT_SD_FLEASCRATCH` (path 1, interval 0.01 < 1/60)
+  is timer-driven so not gated by #14's fix (expected ~2x at 60 fps, tiny; random idle anim, not measured reliably).
