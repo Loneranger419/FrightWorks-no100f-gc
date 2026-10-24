@@ -77,7 +77,7 @@ Add a small `tools/debug/yn-bisect/<bug>-repro.ps1` that:
 
 | Piece | What to set |
 | --- | --- |
-| Level | `-Boot` / `BOOT=` for the glitch room |
+| Level | `-Boot` / `BOOT=` for the glitch room (scene IDs and names: `tools/debug/game/levels.md`) |
 | Settle | Delay until world is ready |
 | Move | `NSMBW_INPUT_SCRIPT` with `STICK_*` (keep pad “connected” so unplug pause does not freeze) |
 | Optional dump | Env for owner/trace logs if needed |

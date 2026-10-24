@@ -34,6 +34,8 @@ what changes: positions, timers, spawn counts, pools. The usual cause in this po
 
 ## Parking Scooby at a fixed spot (`tools/debug/game/mkhip.py`)
 
+Pick the scene from `tools/debug/game/levels.md` (scene IDs, level names, which scenes have torches/fog/rain/...).
+
 The camera can't be turned, so a fixed spawn gives a fixed view. `mkhip.py` writes a patched level HIP into the `zz-manual`
 boot mod that `manual-session start` creates (game data: local only).
 

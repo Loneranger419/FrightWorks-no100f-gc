@@ -39,7 +39,7 @@ user's own `Config.toml` there as `Config.user.toml` (session scripts restore it
 | `overrides.py` | Active native overrides; `--effects`, `--xref` (`__GXData` fields only the replaced original maintained) |
 | `dff/` | Dolphin `.dff` FIFO log decoder, renders, pool/dynamic-array listers |
 | `audio/` | `crackle.py` click detector, `adpcm_ref.py` disc reference decode + bit-exact compare, `hip.py` HIP asset lister |
-| `game/` | `mkhip.py` (spawn spot / move NPCs via the boot mod), `spots.txt`, `findpos.py`, `addrrefs.py`, `parsys.py`, `births.py` + `births-run.ps1` |
+| `game/` | `levels.md` (scene IDs ↔ level names, which scenes to test what in) + `levels.py` (reads the table from `main.dol`), `mkhip.py` (spawn spot / move NPCs via the boot mod), `spots.txt`, `findpos.py`, `addrrefs.py`, `parsys.py`, `births.py` + `births-run.ps1` |
 | `capture/` | `get-ffmpeg.ps1` + `ffbin.py` (find or fetch ffmpeg), `record.ps1` (gdigrab of the game window), `flashcount.py` (one-frame flash counter), `triplet.py` |
 | `yn-bisect/` | `curtain-repro.ps1` scripted landing template, `curtain-ask.ps1` Y/N toast helper (need `yn-bisect-harness.patch`) |
 | `holiday-shots.ps1` | Screenshot loop for `[game] holiday` dates per hub (needs PR #13) |
