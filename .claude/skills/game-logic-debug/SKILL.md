@@ -1,0 +1,96 @@
+---
+name: game-logic-debug
+description: >-
+  Root-cause gameplay, timing and simulation bugs in the Scooby-Doo recomp: things that behave differently at 60 fps
+  ([video] fps60), particles that flicker, pop or double, objects in the wrong place, anything where the game's own
+  state (not GPU state) goes wrong. Covers parking Scooby at a fixed spot (mkhip.py + F9 spots), reading/poking guest
+  memory live (postool), counting particles per system/emitter, and measuring flicker from recordings.
+---
+
+# Game-logic / frame-rate debugging
+
+GPU state bugs (wrong geometry, textures, blend) → `hle-divergence-debug`. This skill is for when the *game's* data is
+what changes: positions, timers, spawn counts, pools. The usual cause in this port is a game loop that assumed 30 Hz.
+
+## How fps60 works (and how it breaks things)
+
+- `[video] fps60`: `VIGetRetraceCount` doubles the count for `lr == 0x800AD690`, so the main loop runs twice per 30 Hz frame
+  and the game steps everything by the measured `dt` (half as large).
+- Code that scales by `dt` is fine. Code that acts **per call** (emit N particles, add a fixed step, count frames) does it twice
+  as often. Find the per-call site and make it run at the game's 30 Hz rate; don't touch the consumers.
+- Fix pattern (PR #14, `hle/no100f_particles.cpp`): native override of the per-frame caller that accumulates `dt` per object
+  and calls the original once the sum reaches 0.75/30 s, passing the summed `dt`. Gate on `RuntimeConfigFile::Fps60()` so 30 fps
+  is byte-for-byte unchanged. A 30 fps frame (slowdown) still reaches the threshold alone.
+
+## Order of work
+
+1. **Measure the symptom** with a fixed view: park Scooby (below), record 6 s at fps60 on/off, `flashcount.py` each. Check
+   Dolphin too (`hle-divergence-debug` step 5) — "Dolphin is smooth" separates port bugs from game bugs.
+2. **Find the data**: postool `dump` MEM1, `findpos.py` for a known world position, `addrrefs.py` for code that builds an
+   address, `dol.py callers/func` for who writes it. `trace ADDR N` follows a linked list per frame.
+3. **Count, don't eyeball**: per-system pool use (`parsys.py`), per-emitter spawn rate at 30 vs 60 (`births-run.ps1` + `births.py`).
+4. **Fix at the per-call site**, re-measure with the same tools (rates within noise of 30 fps, flash count 0), then human visual
+   check + smoke boots.
+
+## Parking Scooby at a fixed spot (`tools/debug/game/mkhip.py`)
+
+The camera can't be turned, so a fixed spawn gives a fixed view. `mkhip.py` writes a patched level HIP into the `zz-manual`
+boot mod that `manual-session start` creates (game data: local only).
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 start -Boot i004 -AllPowerups   # writes zz-manual + Config
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop
+python tools\debug\game\mkhip.py i004 --spot spot1            # spawn there, all NPCs moved off-map (--npc none keeps them)
+#   or: mkhip.py i004 --pos X Y Z --yaw R
+Start-Process 'Play\Scooby-Doo Refrightened.exe' -WorkingDirectory Play   # not manual-session start: it rewrites zz-manual
+```
+
+- Spots: with `postool.patch` built in, **F9** (global hotkey) appends Scooby's position + yaw to `Play/postool/spots.txt`
+  (beeps). Copy good ones to `tools/debug/game/spots.txt` (i004 grate spots are there). F9 saves the feet; mkhip adds 0.3 to Y.
+- NPCs: clearing `baseFlags & 1` does nothing (NPC code ignores it), so mkhip moves them to (2000+50i, -500, 2000).
+- Poking Scooby's matrix live doesn't stick (physics rewrites it); use the spawn.
+- Clean up afterwards: delete `Play\UserData\mods\zz-manual`, copy `tools\debug\local\Config.user.toml` back.
+
+## postool (`tools/debug/patches/postool.patch`, `hle/vi.cpp`)
+
+Every 20 main-loop frames it runs the lines in `Play/postool.txt`, then deletes the file; output in `Play/postool/`.
+
+| Command | Output |
+| --- | --- |
+| `dump NAME` | MEM1 big-endian → `NAME.bin` (for `findpos.py`, `parsys.py`) |
+| `peek ADDR [N]` | N words → `peek.txt` |
+| `poke ADDR HEX...` | write words (floats as hex) |
+| `trace ADDR N` | N frames of the list whose head is `[ADDR]`: length + first 4 particles → `trace.txt` |
+| `births SECONDS` | particle births per owner emitter asset → `births.txt` (`p1` tag only with a probe line in the emitter override) |
+
+## Measuring flicker (`tools/debug/capture/`)
+
+- `record.ps1 -Out x.mp4 [-Seconds 6] [-Toggle]`: gdigrab of the game's client rect (window capture of the swapchain is black).
+  `-Toggle` holds `Play/fogstat.txt` for the duration (for `fogstat-probes.patch`).
+- `flashcount.py x.mp4`: drops duplicate frames, counts cells in the lower half that jump >3 for exactly one frame.
+- `triplet.py x.mp4 K out.png [box]`: frames K-1/K/K+1 + amplified difference, to see what flashed.
+
+## Game facts
+
+- **Particles**: one pool, 2000 × 0x50 at `0x80210858..0x80237958`. Particle: +0 next, +4 prev, +8 life left, +0xC colour,
+  +0x10 pos, +0x1C size, +0x20 vel, +0x3C owner (emitter asset in RAM; first word = asset ID).
+  - Systems: pointer array at `0x80237958`; system +0 list head, +8 count, +0x11 priority, +0x12 flags.
+  - Allocator `fn_80032728`: free list (`fn_800325C8`); when empty it **steals the head particle of a lower-priority system**.
+    Pool exhaustion shows up as the lowest-priority effect (i004 floor fog, priority 0) losing particles.
+  - Emit `fn_800C4B04(emitter r3, dt f1)`: timer at +0x1C; when ≤ 0 emits `asset+0xA` ± `asset+0xB` and resets to `asset+0xC`.
+    Interval 0 = emits on **every call** (256 of 433 disc emitters; mostly one-shots).
+  - Callers: `fn_800C4AAC` per-frame update (pause check `fn_800AD3B4`, enabled bit +0x18; called from `fn_800CE760`) —
+    fixed by PR #14. `fn_800C5C0C` "emit with overrides", ~90 entity-code callers — **not fixed** (see AGENTS.md open thread).
+- **HIP assets** (`audio/hip.py` lists, `game/mkhip.py` has an `assets()` walker): xEntAsset pos at +0x1C; PLYR yaw at +0x10.
+  PARE +9 type, +0xA count, +0xB variance, +0xC interval, +0x30 PARS ID. PARS +0xC parent, +0x16 maxPar.
+- Scooby's model matrix (xMat4x3: right, up, at, pos) at `[0x802453C8]`; yaw = `atan2(at.x, at.z)`.
+- `sd2.ini` in the boot mod sets `TakeDamage = 0` (`-AllPowerups` also unlocks gadgets).
+
+## Traps
+
+- `powershell -File script.ps1 -Levels a,b` passes ONE string `"a,b"`; a bad `BOOT=` crashes the game ("Missing indirect jump
+  target"). `births-run.ps1` splits and validates; do the same in new scripts and abort on a `crash_*` file in the log dir.
+- Wait for a level by polling the newest `Play/UserData/Logs/*/console.log` for `<level>.HIP`, not with fixed sleeps.
+- At 60 fps the recorder sees each game frame ~twice; always compare unique frames.
+
+Case history: `fog-pr14.md`.

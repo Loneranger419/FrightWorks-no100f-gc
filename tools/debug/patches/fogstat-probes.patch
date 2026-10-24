@@ -1,0 +1,251 @@
+diff --git a/wiicompiled/aurora-main/lib/gx/command_processor.cpp b/wiicompiled/aurora-main/lib/gx/command_processor.cpp
+index 6d098c6..5ce9a26 100644
+--- a/wiicompiled/aurora-main/lib/gx/command_processor.cpp
++++ b/wiicompiled/aurora-main/lib/gx/command_processor.cpp
+@@ -1,4 +1,5 @@
+ #include <set>
++#include <map>
+ #include <cstdio>
+ #include <exception>
+ #include <absl/container/flat_hash_set.h>
+@@ -38,6 +39,7 @@ int g_spmBBoxArmed = 0;
+ unsigned g_spmAudit[8] = {};  // render audit for tools/sweep-spm-maps.py
+ unsigned g_spmGameClear = 0;  // the game's own EFB clear colour (0xRRGGBB) while sweeping
+ int g_spmCullOff = 0;
++int (*g_no100fGuestBacktrace)(char* out, int size) = nullptr;  // FOGCOV PROBE: set by the runtime
+ }
+ namespace aurora::gx {
+ GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noexcept;  // gx.cpp
+@@ -2083,6 +2085,7 @@ static u32 calculate_last_vtx_size(GXVtxFmt fmt) {
+   return vtxSize;
+ }
+ 
++static bool g_fogStatRaw = false;  // FOGSTAT PROBE: draw came through submit_raw_draw
+ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+                                  gfx::Range vertRange, uint16_t usedPnMtxMask,
+                                  HashType matrixTopologySignature,
+@@ -2860,6 +2863,138 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
+   spm_bbox_accumulate(fmt, vertices, vtxCount, vtxSize, true);
+   if (!has_complete_primitive(prim, vtxCount)) return true;
+   if (!g_gxState.zFreeze) update_zfreeze_reference(prim, fmt, vertices, vtxCount, vtxSize, true);
++  {  // FOGCOV PROBE: while Play/fogstat.txt exists, per frame and per raw blended triangle batch kind: triangles, mean vertex
++     // alpha, mean screen area (NDC^2), and coverage = sum(area * alpha) -- a one-frame flash shows up as a coverage spike
++    struct Acc { u32 tris = 0; double alpha = 0, area = 0, cov = 0; float zmin = 9, zmax = -9; u32 near = 0; double nearAlpha = 0; float wmin = 1e9f; };
++    static std::map<std::string, Acc> acc;
++    static std::string order;  // one letter per raw blended triangle batch, in draw order (per distinct texture data)
++    static std::map<uintptr_t, char> letters;
++    static bool on = false;
++    static int left = 0;
++    static uint32_t frame = UINT32_MAX;
++    static auto lastPoll = std::chrono::steady_clock::time_point{};
++    const auto now = std::chrono::steady_clock::now();
++    if (now - lastPoll > std::chrono::milliseconds(200)) {
++      lastPoll = now;
++      FILE* f = std::fopen("fogstat.txt", "rb");
++      if (f) std::fclose(f);
++      if (f && !on) left = 300;
++      on = f != nullptr;
++    }
++    if (const uint32_t cur = gfx::current_frame(); cur != frame) {
++      if (left > 0 && frame != UINT32_MAX && !acc.empty()) {
++        std::string line;
++        for (const auto& [k, a] : acc)
++          line += fmt::format(" | {} t{} a{:.0f} ar{:.5f} cov{:.2f} z{:.3f}..{:.3f} near{} na{:.0f} wmin{:.2f}", k, a.tris,
++                              a.tris ? a.alpha / (3.0 * a.tris) : 0.0, a.tris ? a.area / a.tris : 0.0, a.cov, a.zmin, a.zmax, a.near,
++                              a.near ? a.nearAlpha / (3.0 * a.near) : 0.0, a.wmin);
++        Log.warn("[fogcov] f{} ord {}{}", frame, order, line);
++        --left;
++      }
++      acc.clear();
++      order.clear();
++      frame = cur;
++    }
++    const auto& vd = g_gxState.vtxDesc;
++    if (left > 0 && prim == GX_TRIANGLES && g_gxState.blendMode != GX_BM_NONE && vd[GX_VA_CLR0] == GX_DIRECT &&
++        vd[GX_VA_POS] == GX_DIRECT) {
++      const auto& af = g_gxState.vtxFmts[fmt].attrs;
++      auto compSize = [](GXCompType t) { return t == GX_F32 ? 4u : (t >= GX_U16 ? 2u : 1u); };
++      u32 off = matrix_index_prefix_size(fmt) + (af[GX_VA_POS].cnt == GX_POS_XY ? 2u : 3u) * compSize(af[GX_VA_POS].type);
++      if (vd[GX_VA_NRM] == GX_DIRECT) off += (af[GX_VA_NRM].cnt == GX_NRM_XYZ ? 3u : 9u) * compSize(af[GX_VA_NRM].type);
++      const GXCompType ct = af[GX_VA_CLR0].type;  // RGB565 RGB8 RGBX8 RGBA4 RGBA6 RGBA8
++      auto alphaOf = [&](const u8* v) -> float {
++        const u8* c = v + off;
++        switch (ct) {
++        case GX_RGBA8: return c[3];
++        case GX_RGBA4: return float(c[1] & 0xF) * 17.f;
++        case GX_RGBA6: return float(((c[1] & 0xF) << 2) | (c[2] >> 6)) * 255.f / 63.f;
++        default: return 255.f;
++        }
++      };
++      const auto& t0 = g_gxState.loadedTextures[0];
++      if (auto [it, fresh] = letters.try_emplace(reinterpret_cast<uintptr_t>(t0.data), char('A' + letters.size() % 26)); true) {
++        order += it->second;
++        if (fresh && g_no100fGuestBacktrace) {
++          char bt[256];
++          g_no100fGuestBacktrace(bt, sizeof bt);
++          Log.warn("[fogcov] batch {} = {}x{} d{:04X} n{} | guest {}", it->second, t0.width(), t0.height(),
++                   reinterpret_cast<uintptr_t>(t0.data) & 0xFFFF, vtxCount, bt);
++        }
++      }
++      auto& a = acc[fmt::format("{}x{} bl{}/{} c{} img{:06X} d{:04X} v{}", t0.width(), t0.height(), int(g_gxState.blendFacSrc),
++                                int(g_gxState.blendFacDst), int(ct), t0.image3 & 0xFFFFFF, reinterpret_cast<uintptr_t>(t0.data) & 0xFFFF,
++                                t0.texDataVersion)];
++      auto viewW = [&](const u8* v) {  // distance in front of the camera (-view z) of one DIRECT f32 position
++        const u8* pp = v + matrix_index_prefix_size(fmt);
++        float pos[3];
++        for (int c = 0; c < 3; ++c) pos[c] = spm_bbox_comp(pp + c * 4, GX_F32, 0, true);
++        const u32 mi = (vd[GX_VA_PNMTXIDX] == GX_DIRECT ? v[0] : g_gxState.currentPnMtx) / 3u;
++        float m[12];
++        std::memcpy(m, &g_gxState.pnMtx[mi % MaxPnMtx].pos, sizeof(m));
++        return -(m[8] * pos[0] + m[9] * pos[1] + m[10] * pos[2] + m[11]);
++      };
++      const bool posF32 = af[GX_VA_POS].type == GX_F32 && af[GX_VA_POS].cnt == GX_POS_XYZ;
++      for (u32 i = 0; i + 2 < vtxCount; i += 3) {
++        float p[3][3];
++        const u8* v0 = vertices + i * vtxSize;
++        if (posF32) {
++          const float w = std::min({viewW(v0), viewW(v0 + vtxSize), viewW(v0 + 2 * vtxSize)});
++          a.wmin = std::min(a.wmin, w);
++          if (w < 3.f) {  // within 3 units of the camera (or behind it)
++            ++a.near;
++            a.nearAlpha += alphaOf(v0) + alphaOf(v0 + vtxSize) + alphaOf(v0 + 2 * vtxSize);
++          }
++        }
++        if (!gx_vertex_ndc(fmt, v0, true, p[0]) || !gx_vertex_ndc(fmt, v0 + vtxSize, true, p[1]) ||
++            !gx_vertex_ndc(fmt, v0 + 2 * vtxSize, true, p[2]))
++          continue;
++        const double area = 0.5 * std::fabs((p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]));
++        const float al = alphaOf(v0) + alphaOf(v0 + vtxSize) + alphaOf(v0 + 2 * vtxSize);
++        ++a.tris;
++        a.alpha += al;
++        a.area += area;
++        a.cov += std::min(area, 4.0) * al / (3.0 * 255.0);
++        a.zmin = std::min({a.zmin, p[0][2], p[1][2], p[2][2]});
++        a.zmax = std::max({a.zmax, p[0][2], p[1][2], p[2][2]});
++      }
++      // FOGQUADS: every quad (2 tris) of the big i004 fog batch (texture data low 16 bits 0xE7A0) to fogquads.bin:
++      // per quad u32 frame, u32 index in frame, f32 raw pos centre xyz, f32 raw extent, f32 view w, f32 NDC area, f32 alpha
++      static FILE* qf = nullptr;
++      static uint32_t qFrame = UINT32_MAX, qIndex = 0;
++      if (posF32 && (reinterpret_cast<uintptr_t>(t0.data) & 0xFFFF) == 0xE7A0) {
++        if (!qf) qf = std::fopen("fogquads.bin", "wb");
++        if (frame != qFrame) { qFrame = frame; qIndex = 0; }
++        for (u32 i = 0; i + 5 < vtxCount && qf; i += 6, ++qIndex) {
++          float c[3] = {}, lo[3] = {1e9f, 1e9f, 1e9f}, hi[3] = {-1e9f, -1e9f, -1e9f}, al = 0, w = 1e9f;
++          double area = 0;
++          for (u32 k = 0; k < 6; ++k) {
++            const u8* v = vertices + (i + k) * vtxSize;
++            const u8* pp = v + matrix_index_prefix_size(fmt);
++            for (int j = 0; j < 3; ++j) {
++              const float x = spm_bbox_comp(pp + j * 4, GX_F32, 0, true);
++              c[j] += x / 6.f; lo[j] = std::min(lo[j], x); hi[j] = std::max(hi[j], x);
++            }
++            al += alphaOf(v) / 6.f;
++            w = std::min(w, viewW(v));
++          }
++          for (u32 t = 0; t < 2; ++t) {
++            float p[3][3];
++            const u8* v0 = vertices + (i + t * 3) * vtxSize;
++            if (gx_vertex_ndc(fmt, v0, true, p[0]) && gx_vertex_ndc(fmt, v0 + vtxSize, true, p[1]) &&
++                gx_vertex_ndc(fmt, v0 + 2 * vtxSize, true, p[2]))
++              area += 0.5 * std::fabs((p[1][0] - p[0][0]) * (p[2][1] - p[0][1]) - (p[2][0] - p[0][0]) * (p[1][1] - p[0][1]));
++          }
++          const float ext = std::max({hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]});
++          const float rec[8] = {c[0], c[1], c[2], ext, w, float(area), al, 0.f};
++          std::fwrite(&frame, 4, 1, qf);
++          std::fwrite(&qIndex, 4, 1, qf);
++          std::fwrite(rec, 4, 7, qf);
++        }
++        if (qf) std::fflush(qf);
++      }
++    }
++  }
+ 
+   // This entry point bypasses process(), so it owns the renderer lock itself.
+   std::unique_lock gpuLock(aurora::renderer_gpu_mutex());
+@@ -2885,10 +3020,12 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
+         (untextured ? (e[1] <= -0.99f || e[3] >= 0.99f)
+                     : e[1] <= -0.99f && e[3] >= 0.99f && g_gxState.blendMode == GX_BM_BLEND && g_gxState.blendFacSrc == GX_BL_SRCALPHA);
+   }
++  g_fogStatRaw = true;  // FOGSTAT PROBE
+   handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
+                        matrixUsage.mask, matrixUsage.topologySignature,
+                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
+                        interpolationIdentityActive);
++  g_fogStatRaw = false;
+   g_rawFullscreenOverlay = false;
+   return true;
+ }
+@@ -3195,6 +3332,44 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+     const unsigned i = g_spmDrawIdx++;
+     if (i >= skipDraws.first && i <= skipDraws.second) return;
+   }
++  {  // FOGSTAT PROBE: while Play/fogstat.txt exists, one line per frame (300 per toggle) counting blended non-list draws
++    static bool on = false;
++    static int left = 0;
++    static uint32_t frame = UINT32_MAX;
++    static auto lastPoll = std::chrono::steady_clock::time_point{};
++    static std::map<std::string, std::pair<u32, u32>> counts;  // key -> draws, verts
++    const auto now = std::chrono::steady_clock::now();
++    if (now - lastPoll > std::chrono::milliseconds(200)) {
++      lastPoll = now;
++      FILE* f = std::fopen("fogstat.txt", "rb");
++      if (f) std::fclose(f);
++      if (f && !on) left = 300;
++      on = f != nullptr;
++    }
++    const uint32_t cur = gfx::current_frame();
++    if (cur != frame) {
++      if (left > 0 && frame != UINT32_MAX && !counts.empty()) {
++        std::string line;
++        for (const auto& [k, v] : counts) line += fmt::format(" | {} x{} v{}", k, v.first, v.second);
++        Log.warn("[fogstat] f{}{}", frame, line);
++        --left;
++      }
++      counts.clear();
++      frame = cur;
++    }
++    if (left > 0) {  // GX distance fog in use this frame (any draw path), with how many draws used it
++      const auto& fg = g_gxState.fog;
++      ++counts[fmt::format("FOG t{} a{:.4g} b{:.4g} c{:.4g} col{:.2f},{:.2f},{:.2f}", int(fg.type), fg.a, fg.b, fg.c, fg.color.x(),
++                           fg.color.y(), fg.color.z())].first;
++    }
++    if (left > 0 && !g_replayingDisplayList && g_gxState.blendMode != GX_BM_NONE) {
++      const auto& t0 = g_gxState.loadedTextures[0];
++      auto& c = counts[fmt::format("{} {}x{} bl{}/{}/{} p{:x}", g_fogStatRaw ? "raw" : "fifo", t0.width(), t0.height(),
++                                   int(g_gxState.blendMode), int(g_gxState.blendFacSrc), int(g_gxState.blendFacDst), int(prim))];
++      ++c.first;
++      c.second += vtxCount;
++    }
++  }
+   // NO100F diagnostic (env NO100F_SHADOW_TEST): 1 = skip the shadow receiver (blend ZERO / INV_SRC_COLOR),
+   // 2 = skip ortho draws textured with a 256x256 RGBA8 (restore of the EFB corner the shadow is rendered in).
+   static const int shadowTest = [] { const char* e = std::getenv("NO100F_SHADOW_TEST"); return e ? std::atoi(e) : 0; }();
+diff --git a/wiicompiled/runtime/src/hle/gx/gx_dl.cpp b/wiicompiled/runtime/src/hle/gx/gx_dl.cpp
+index d0689bb..255126e 100644
+--- a/wiicompiled/runtime/src/hle/gx/gx_dl.cpp
++++ b/wiicompiled/runtime/src/hle/gx/gx_dl.cpp
+@@ -1321,6 +1321,23 @@ extern "C" void GxNotifyDisplayListMemoryWrite(uint32_t addr, uint32_t size) {
+     return false;
+ }
+ 
++// FOGCOV PROBE: guest backtrace (LR, then the saved LR of each stack frame) for aurora's raw-draw probe
++extern "C" int (*g_no100fGuestBacktrace)(char* out, int size);
++static int No100fGuestBacktrace(char* out, int size) {
++    const CpuContext* x = TryGetCpuContext();
++    if (!x) return std::snprintf(out, size, "?");
++    int n = std::snprintf(out, size, "lr %08X", uint32_t(x->lr));
++    uint32_t sp = x->gpr[1];
++    for (int i = 0; i < 10 && n < size - 12; ++i) {
++        uint32_t next = 0, lr = 0;
++        if (!Memory::TryRead32(sp, next) || !next || !Memory::TryRead32(next + 4, lr)) break;
++        n += std::snprintf(out + n, size - n, " %08X", lr);
++        sp = next;
++    }
++    return n;
++}
++static const bool s_no100fGuestBacktraceSet = [] { g_no100fGuestBacktrace = &No100fGuestBacktrace; return true; }();
++
+ extern "C" void GX__CallDisplayList_80172f64(uint32_t listAddr, uint32_t nbytes) {
+     if (nbytes == 0 || listAddr == 0) return;
+     static const int s_skipId = std::getenv("SPM_SKIP_MATDL") ? std::atoi(std::getenv("SPM_SKIP_MATDL")) : -1;  // diagnostic: drop the geometry list drawn after material list <id>

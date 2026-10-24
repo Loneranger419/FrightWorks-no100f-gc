@@ -1,0 +1,830 @@
+diff --git a/wiicompiled/aurora-main/lib/dolphin/gx/GXDispList.cpp b/wiicompiled/aurora-main/lib/dolphin/gx/GXDispList.cpp
+index ecd37fd..c015b7d 100644
+--- a/wiicompiled/aurora-main/lib/dolphin/gx/GXDispList.cpp
++++ b/wiicompiled/aurora-main/lib/dolphin/gx/GXDispList.cpp
+@@ -18,6 +18,7 @@ static void process_display_list(const u8* data, u32 nbytes, bool bigEndian) {
+     ReplayScope() { aurora::gx::fifo::g_replayingDisplayList = true; }
+     ~ReplayScope() { aurora::gx::fifo::g_replayingDisplayList = prev; }
+   } replayScope;
++  aurora::gx::fifo::no100f_probe_list_start();  // LISTSTART PROBE
+   u32 consumed = 0;
+   bool retried = false;
+   while (consumed < nbytes) {
+@@ -32,6 +33,14 @@ static void process_display_list(const u8* data, u32 nbytes, bool bigEndian) {
+ }
+ 
+ extern "C" {
++// PENDING PROBE: Aurora-side work a GXCallDisplayList would flush/drain before running a list
++void no100f_aurora_pending(unsigned* dirty, unsigned* vnum, unsigned* fifoBytes, const unsigned char** fifoData) {
++  *dirty = __gx->dirtyState;
++  *vnum = *reinterpret_cast<u32*>(&__gx->vNum);
++  *fifoBytes = aurora::gx::fifo::get_buffer_size();
++  *fifoData = aurora::gx::fifo::get_buffer_data();
++}
++
+ bool GXDisplayListIsEmpty() {
+   return aurora::gx::fifo::in_display_list() && aurora::gx::fifo::detail::sDlWritePos == 0 &&
+          __gx->dirtyState == 0;
+diff --git a/wiicompiled/aurora-main/lib/dolphin/gx/GXGeometry.cpp b/wiicompiled/aurora-main/lib/dolphin/gx/GXGeometry.cpp
+index 2e54e10..92c76b7 100644
+--- a/wiicompiled/aurora-main/lib/dolphin/gx/GXGeometry.cpp
++++ b/wiicompiled/aurora-main/lib/dolphin/gx/GXGeometry.cpp
+@@ -3,6 +3,14 @@
+ #include "dolphin/gd/GDGeometry.h"
+ #include "../../gx/fifo.hpp"
+ 
++#include <cstdio>
++// VCDAPI PROBE: native callers of Aurora's VCD API
++static void VcdApiProbe(const char* fn, void* ra) {
++  static unsigned n = 0;
++  ++n;
++  if (n <= 20 || (n % 5000) == 0) { std::fprintf(stderr, "[vcdapi] #%u %s ra %p\n", n, fn, ra); std::fflush(stderr); }
++}
++
+ static inline void SETVCDATTR(GXAttr attr, GXAttrType type) {
+   switch (attr) {
+   case GX_VA_PNMTXIDX:
+@@ -168,6 +176,7 @@ static inline bool AuroraVtxAttrFmtDiffers(GXVtxFmt vtxfmt, GXAttr attr, GXCompC
+ extern "C" {
+ 
+ void GXSetVtxDesc(GXAttr attr, GXAttrType type) {
++  VcdApiProbe("GXSetVtxDesc", __builtin_return_address(0));
+   const u32 oldVcdLo = __gx->vcdLo;
+   const u32 oldVcdHi = __gx->vcdHi;
+   const u8 oldHasNrms = __gx->hasNrms;
+@@ -195,6 +204,7 @@ void GXSetSourceVtxDesc(GXAttr attr, GXAttrType type) {
+ }
+ 
+ void GXSetVtxDescv(GXVtxDescList* list) {
++  VcdApiProbe("GXSetVtxDescv", __builtin_return_address(0));
+   const u32 oldVcdLo = __gx->vcdLo;
+   const u32 oldVcdHi = __gx->vcdHi;
+   const u8 oldHasNrms = __gx->hasNrms;
+@@ -220,6 +230,7 @@ void GXSetVtxDescv(GXVtxDescList* list) {
+ }
+ 
+ void GXClearVtxDesc() {
++  VcdApiProbe("GXClearVtxDesc", __builtin_return_address(0));
+   __gx->vcdLo = 0;
+   SET_REG_FIELD(0, __gx->vcdLo, 2, 9, 1); // GX_VA_POS = GX_DIRECT
+   __gx->vcdHi = 0;
+diff --git a/wiicompiled/aurora-main/lib/dolphin/gx/GXManage.cpp b/wiicompiled/aurora-main/lib/dolphin/gx/GXManage.cpp
+index 80b3b92..1adaa7d 100644
+--- a/wiicompiled/aurora-main/lib/dolphin/gx/GXManage.cpp
++++ b/wiicompiled/aurora-main/lib/dolphin/gx/GXManage.cpp
+@@ -3,6 +3,7 @@
+ 
+ #include "../../gx/fifo.hpp"
+ 
++#include <cstdio>
+ #include <cstring>
+ 
+ // Global shadow register instance
+@@ -11,6 +12,8 @@ __GXData_struct* __gx = &sGXData;
+ static GXFifoObj sFifoObj;
+ 
+ extern "C" {
++bool no100f_cp_cached(unsigned char addr, unsigned* out);  // SHADOWVCD PROBE (command_processor.cpp)
++extern unsigned g_no100fCurList;
+ static GXDrawDoneCallback DrawDoneCB = nullptr;
+ 
+ GXFifoObj* GXInit(void* base, u32 size) {
+@@ -305,6 +308,14 @@ void __GXSetDirtyState() {
+     __GXUpdateBPMask();
+   }
+   if (__gx->dirtyState & 4) {
++    {  // STATECHECK PROBE: Aurora re-sending its own (API-shadow) genMode
++      static unsigned n = 0;
++      if (++n <= 40 || (n % 1000) == 0) {
++        std::fprintf(stderr, "[auroradirty] #%u genMode %06X (texgens %u chans %u tev %u cull %u)\n", n, __gx->genMode & 0xFFFFFF,
++                     __gx->genMode & 0xF, (__gx->genMode >> 4) & 7, ((__gx->genMode >> 10) & 0xF) + 1, (__gx->genMode >> 14) & 3);
++        std::fflush(stderr);
++      }
++    }
+     __GXSetGenMode();
+   }
+   if (__gx->dirtyState & 8) {
+@@ -335,6 +346,14 @@ void __GXSendFlushPrim() {
+ }
+ 
+ void __GXSetVCD() {
++  {  // SHADOWVCD PROBE: the API shadow re-emits the whole VCD; report bits that differ from what the decoder last applied
++    unsigned lo = 0, hi = 0;
++    const bool haveLo = no100f_cp_cached(0x50, &lo), haveHi = no100f_cp_cached(0x60, &hi);
++    static unsigned n = 0;
++    if (((haveLo && lo != __gx->vcdLo) || (haveHi && hi != __gx->vcdHi)) && ++n <= 300)
++      std::fprintf(stderr, "[shadowvcd] #%u emit lo %05X hi %04X | decoder lo %05X hi %04X | diff lo %05X hi %04X | list %08X\n", n,
++                   __gx->vcdLo, __gx->vcdHi, lo, hi, lo ^ __gx->vcdLo, hi ^ __gx->vcdHi, g_no100fCurList);
++  }
+   // Write VCD lo and hi to CP registers
+   GX_WRITE_SOME_REG4(8, 0x50, __gx->vcdLo, -12);
+   GX_WRITE_SOME_REG4(8, 0x60, __gx->vcdHi, -12);
+diff --git a/wiicompiled/aurora-main/lib/gx/command_processor.cpp b/wiicompiled/aurora-main/lib/gx/command_processor.cpp
+index 1f4f527..9d87573 100644
+--- a/wiicompiled/aurora-main/lib/gx/command_processor.cpp
++++ b/wiicompiled/aurora-main/lib/gx/command_processor.cpp
+@@ -38,6 +38,11 @@ int g_spmBBoxArmed = 0;
+ unsigned g_spmAudit[8] = {};  // render audit for tools/sweep-spm-maps.py
+ unsigned g_spmGameClear = 0;  // the game's own EFB clear colour (0xRRGGBB) while sweeping
+ int g_spmCullOff = 0;
++unsigned g_no100fGhostList = 0;  // GHOST PROBE: set by the runtime while a ghost-model list replays
++unsigned g_no100fCurList = 0;    // GHOST PROBE: list being replayed by the runtime (0 = raw FIFO)
++int g_no100fAfterScooby = 0;
++int g_no100fFrameDump = 0;  // FRAME PROBE: draws left to dump in the current frame
++bool (*g_no100fGuestGxRead)(unsigned off, unsigned* out) = nullptr;  // STATECHECK PROBE: set by the runtime (game's __GXData)
+ }
+ namespace aurora::gx {
+ GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noexcept;  // gx.cpp
+@@ -337,6 +342,13 @@ static inline void mark_pipeline_state_dirty() noexcept {
+   g_gxState.pipelineStateGeneration = next_gx_state_epoch();
+ }
+ 
++// LISTSTART PROBE: NO100F_LIST_START=1 vtx-size cache, 2 pipeline dirty, 3 both, at every display-list replay start.
++void no100f_probe_list_start() {
++  static const int mode = [] { const char* e = std::getenv("NO100F_LIST_START"); return e ? std::atoi(e) : 0; }();
++  if (mode & 1) g_gxState.clearVtxSizeCache();
++  if (mode & 2) mark_pipeline_state_dirty();
++}
++
+ // Rejects a malformed XF write in release builds.
+ #define XF_REQUIRE(cond, msg, ...)                                                                                     \
+   do {                                                                                                                 \
+@@ -909,6 +921,12 @@ static void handle_bp(u32 value, bool bigEndian) {
+     g_gxState.invalidateXfReg(0x3F);
+     g_gxState.invalidateXfReg(0x09);
+     g_gxState.numTevStages = bp_get(value, 4, 10) + 1;
++    if (static const bool zfrz = std::getenv("NO100F_ZFRZ") != nullptr; zfrz && (bp_get(value, 1, 19) != 0) != g_gxState.zFreeze) {
++      static int n = 0;  // ZFRZ PROBE: every coplanar change the game asks for, and whether Aurora honours it
++      if (n++ < 300)
++        Log.warn("[zfrz] genmode {:06X} asks zfreeze {} (now {}) {} list {:08X}", value & 0xFFFFFF, bp_get(value, 1, 19),
++                 int(g_gxState.zFreeze), g_replayingDisplayList ? "IGNORED in list" : "applied raw", g_no100fCurList);
++    }
+     if (!g_replayingDisplayList) g_gxState.zFreeze = bp_get(value, 1, 19) != 0;
+     else  // keep the cached register honest so the game's own coplanar-off write is not deduplicated away
+       g_gxState.bpRegCache[0x00] = (g_gxState.bpRegCache[0x00] & ~(1u << 19)) | (u32(g_gxState.zFreeze) << 19);
+@@ -1611,11 +1629,35 @@ void reset_cp_register_cache() {
+   s_cpRegisterCacheValid.fill(false);
+ }
+ 
++}  // namespace aurora::gx::fifo
++extern "C" bool no100f_cp_cached(unsigned char addr, unsigned* out) {  // SHADOWVCD PROBE
++  *out = aurora::gx::fifo::s_cpRegisterCache[addr];
++  return aurora::gx::fifo::s_cpRegisterCacheValid[addr];
++}
++namespace aurora::gx::fifo {
++
+ static bool cp_register_write_unchanged(u8 addr, u32 value) {
+   if (!cacheable_cp_register(addr)) return false;
++  static const bool noCache = std::getenv("NO100F_NO_CP_CACHE") != nullptr;  // CPCACHE PROBE
+ 
+   if (s_cpRegisterCacheValid[addr] && s_cpRegisterCache[addr] == value) {
+-    return true;
++    if (addr == 0x50 || addr == 0x60) {  // CPCACHE PROBE: does the skipped VCD write match the live descriptor?
++      const auto& vd = g_gxState.vtxDesc;
++      bool stale = false;
++      if (addr == 0x50) {
++        stale = vd[GX_VA_PNMTXIDX] != GXAttrType(bp_get(value, 1, 0)) || vd[GX_VA_POS] != GXAttrType(bp_get(value, 2, 9)) ||
++                vd[GX_VA_NRM] != GXAttrType(bp_get(value, 2, 11)) || vd[GX_VA_CLR0] != GXAttrType(bp_get(value, 2, 13)) ||
++                vd[GX_VA_CLR1] != GXAttrType(bp_get(value, 2, 15));
++      } else {
++        for (int i = 0; i < 8; ++i) stale |= vd[GX_VA_TEX0 + i] != GXAttrType(bp_get(value, 2, i * 2));
++      }
++      static u32 nStale = 0;
++      if (stale && ++nStale <= 30)
++        Log.warn("[cpcache] stale skip #{} reg {:#x} value {:#x} replay {} | live pos {} nrm {} clr0 {} tex0 {} tex1 {}", nStale, addr,
++                 value, g_replayingDisplayList, int(vd[GX_VA_POS]), int(vd[GX_VA_NRM]), int(vd[GX_VA_CLR0]), int(vd[GX_VA_TEX0]),
++                 int(vd[GX_VA_TEX1]));
++    }
++    if (!noCache) return true;
+   }
+   s_cpRegisterCacheValid[addr] = true;
+   s_cpRegisterCache[addr] = value;
+@@ -2820,6 +2862,85 @@ static bool admit_draw(GXPrimitive prim, GXVtxFmt fmt, u16 count, uint32_t verte
+   return gfx::staging_has_space(demand);
+ }
+ 
++// STATECHECK PROBE (env NO100F_STATECHECK): what the game's own __GXData says the GPU holds vs Aurora's decoded
++// state, at every draw. Native overrides feed Aurora's API shadow instead of the game's __GXData, so a register
++// both sides own can end up with the wrong one's value.
++static void no100f_state_check(GXPrimitive prim, GXVtxFmt vfmt, u32 vtxCount, bool raw) {
++  static const bool on = std::getenv("NO100F_STATECHECK") != nullptr;
++  if (!on || g_no100fGuestGxRead == nullptr) return;
++  auto rd = [](u32 off) { unsigned v = 0; return g_no100fGuestGxRead(off, &v) ? u32(v) : 0u; };
++  static absl::flat_hash_map<std::string, u64> counts;
++  static absl::flat_hash_set<std::string> shown;
++  static u64 nDraws = 0, nBad = 0;
++  static auto lastSummary = std::chrono::steady_clock::now();
++  ++nDraws;
++  const u32 dirty = rd(0x4F4);
++  std::string kinds, detail;
++  auto add = [&](const char* kind, const std::string& d) {
++    if (kinds.find(kind) == std::string::npos) kinds += std::string(kinds.empty() ? "" : ",") + kind;
++    detail += " " + d;
++  };
++  if (!(dirty & 4)) {
++    const u32 gm = rd(0x204);
++    const u32 gTex = gm & 0xF, gChans = (gm >> 4) & 7, gTev = ((gm >> 10) & 0xF) + 1, gHwCull = (gm >> 14) & 3, gInd = (gm >> 16) & 7;
++    const GXCullMode gCull = gHwCull == 1 ? GX_CULL_BACK : gHwCull == 2 ? GX_CULL_FRONT : static_cast<GXCullMode>(gHwCull);
++    if (gTex != g_gxState.numTexGens) add("genmode", fmt::format("texgens g{}/a{}", gTex, g_gxState.numTexGens));
++    if (gChans != g_gxState.numChans) add("genmode", fmt::format("chans g{}/a{}", gChans, g_gxState.numChans));
++    if (gTev != g_gxState.numTevStages) add("genmode", fmt::format("tev g{}/a{}", gTev, g_gxState.numTevStages));
++    if (gCull != g_gxState.cullMode) add("genmode", fmt::format("cull g{}/a{}", int(gCull), int(g_gxState.cullMode)));
++    if (gInd != g_gxState.numIndStages) add("genmode", fmt::format("ind g{}/a{}", gInd, g_gxState.numIndStages));
++  }
++  if (!raw && g_replayingDisplayList && g_no100fCurList != 0 && !(dirty & 8)) {
++    const u32 lo = rd(0x14), hi = rd(0x18);
++    const auto& vd = g_gxState.vtxDesc;
++    bool bad = false;
++    for (int a = GX_VA_PNMTXIDX; a <= GX_VA_TEX7MTXIDX; ++a) bad |= vd[a] != (((lo >> a) & 1) ? GX_DIRECT : GX_NONE);
++    bad |= vd[GX_VA_POS] != GXAttrType((lo >> 9) & 3) || vd[GX_VA_NRM] != GXAttrType((lo >> 11) & 3) ||
++           vd[GX_VA_CLR0] != GXAttrType((lo >> 13) & 3) || vd[GX_VA_CLR1] != GXAttrType((lo >> 15) & 3);
++    for (int t = 0; t < 8; ++t) bad |= vd[GX_VA_TEX0 + t] != GXAttrType((hi >> (t * 2)) & 3);
++    if (bad) add("vcd", fmt::format("vcd g{:05X}/{:04X}", lo & 0x1FFFF, hi & 0xFFFF));
++  }
++  for (u32 i = 0; i < g_gxState.numTevStages && i < 16; ++i) {
++    const u32 c = rd(0x130 + 4 * i) & 0xFFFFFF, a = rd(0x170 + 4 * i) & 0xFFFFFF;
++    if (c != (g_gxState.bpRegCache[0xC0 + 2 * i] & 0xFFFFFF)) add("tevc", fmt::format("tevc{} g{:06X}/a{:06X}", i, c, g_gxState.bpRegCache[0xC0 + 2 * i] & 0xFFFFFF));
++    if (a != (g_gxState.bpRegCache[0xC1 + 2 * i] & 0xFFFFFF)) add("teva", fmt::format("teva{} g{:06X}/a{:06X}", i, a, g_gxState.bpRegCache[0xC1 + 2 * i] & 0xFFFFFF));
++    if ((i & 1) == 0) {
++      const u32 t = rd(0x100 + 2 * i) & 0xFFFFFF, k = rd(0x1B0 + 2 * i) & 0xFFFFFF;
++      if (t != (g_gxState.bpRegCache[0x28 + i / 2] & 0xFFFFFF)) add("tref", fmt::format("tref{} g{:06X}/a{:06X}", i / 2, t, g_gxState.bpRegCache[0x28 + i / 2] & 0xFFFFFF));
++      if (k != (g_gxState.bpRegCache[0xF6 + i / 2] & 0xFFFFFF)) add("ksel", fmt::format("ksel{} g{:06X}/a{:06X}", i / 2, k, g_gxState.bpRegCache[0xF6 + i / 2] & 0xFFFFFF));
++    }
++    const auto& st = g_gxState.tevStages[i];
++    const u32 map = static_cast<u32>(st.texMapId), coord = static_cast<u32>(st.texCoordId);
++    if (map < 8 && coord < 8 && !((rd(0x4DC) >> coord) & 1)) {
++      const auto& tex = g_gxState.loadedTextures[map];
++      const auto& sc = g_gxState.texCoordScales[coord];
++      if (tex.width() != 0 && (sc.scaleS + 1u != tex.width() || sc.scaleT + 1u != tex.height() ||
++                               sc.biasS != (tex.wrap_s() == GX_REPEAT) || sc.biasT != (tex.wrap_t() == GX_REPEAT)))
++        add("su", fmt::format("su st{} c{} m{} tex {}x{} b{}{} su {}x{} b{}{}", i, coord, map, tex.width(), tex.height(),
++                              int(tex.wrap_s() == GX_REPEAT), int(tex.wrap_t() == GX_REPEAT), sc.scaleS + 1u, sc.scaleT + 1u,
++                              int(sc.biasS), int(sc.biasT)));
++    }
++  }
++  if (!kinds.empty()) {
++    ++nBad;
++    ++counts[fmt::format("{} list {:08X}{}", kinds, g_no100fCurList, raw ? " raw" : "")];
++    const std::string key = fmt::format("{:08X}{}", g_no100fCurList, detail);
++    if (shown.size() < 400 && shown.insert(key).second)
++      Log.warn("[statecheck] list {:08X}{} prim {:#x} fmt {} n {} dirty {:X} |{}", g_no100fCurList, raw ? " raw" : "",
++               int(prim), int(vfmt), vtxCount, dirty, detail);
++  }
++  const auto now = std::chrono::steady_clock::now();
++  if (now - lastSummary > std::chrono::seconds(5)) {
++    lastSummary = now;
++    std::vector<std::pair<u64, std::string>> top;
++    for (const auto& [k, n] : counts) top.emplace_back(n, k);
++    std::sort(top.rbegin(), top.rend());
++    std::string s;
++    for (size_t i = 0; i < top.size() && i < 12; ++i) s += fmt::format(" [{}x {}]", top[i].first, top[i].second);
++    Log.warn("[statecheck] summary draws {} bad {} |{}", nDraws, nBad, s);
++  }
++}
++
+ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, uint16_t vtxCount,
+                      uint32_t vertexBytes) {
+   ZoneScoped;
+@@ -2856,6 +2977,7 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
+   }
+ 
+   ++g_spmAudit[0];
++  no100f_state_check(prim, fmt, vtxCount, true);  // STATECHECK PROBE
+   spm_dump_draw("raw", static_cast<u8>(prim | fmt), fmt, vtxCount, vtxSize, vertices, false);
+   spm_bbox_accumulate(fmt, vertices, vtxCount, vtxSize, true);
+   if (!has_complete_primitive(prim, vtxCount)) return true;
+@@ -2918,6 +3040,84 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
+     return false;
+   }
+ 
++  no100f_state_check(prim, fmt, vtxCount, false);  // STATECHECK PROBE
++  if (g_no100fFrameDump > 0) {  // FRAME PROBE: one line per draw
++    --g_no100fFrameDump;
++    float pm[12], mat[4];
++    std::memcpy(pm, &g_gxState.pnMtx[g_gxState.currentPnMtx % MaxPnMtx].pos, sizeof(pm));
++    std::memcpy(mat, &g_gxState.colorChannelState[0].matColor, sizeof(mat));
++    const auto& t0 = g_gxState.loadedTextures[0];
++    Log.warn("[frame] {:08X} n {} vsz {} bl {}/{}/{} z {}/{}/{} zl {} ac {}:{} {}:{} cu {} tev {} mat {:.2f},{:.2f},{:.2f},{:.2f} tex {}x{}f{} T {:.1f},{:.1f},{:.1f}",
++             g_no100fCurList, vtxCount, vtxSize, int(g_gxState.blendMode), int(g_gxState.blendFacSrc), int(g_gxState.blendFacDst),
++             int(g_gxState.depthCompare), int(g_gxState.depthUpdate), int(g_gxState.depthFunc), int(g_gxState.zCompLocBeforeTex),
++             int(g_gxState.alphaCompare.comp0), g_gxState.alphaCompare.ref0, int(g_gxState.alphaCompare.comp1), g_gxState.alphaCompare.ref1,
++             int(g_gxState.colorUpdate), g_gxState.numTevStages, mat[0], mat[1], mat[2], mat[3], int(t0.width()), int(t0.height()),
++             int(t0.format()), pm[3], pm[7], pm[11]);
++  }
++  if (g_no100fGhostList != 0 || g_no100fAfterScooby > 0) {  // GHOST PROBE: full draw state for Scooby's lists and the draws after them
++    const bool after = g_no100fGhostList == 0;
++    if (after) --g_no100fAfterScooby;
++    float pm[12];
++    std::memcpy(pm, &g_gxState.pnMtx[g_gxState.currentPnMtx % MaxPnMtx].pos, sizeof(pm));
++    float mat[4], proj[16];
++    std::memcpy(mat, &g_gxState.colorChannelState[0].matColor, sizeof(mat));
++    std::memcpy(proj, &g_gxState.proj, sizeof(proj));
++    const auto& pa = g_gxState.arrays[GX_VA_POS];
++    std::string posHex;
++    const GXAttrType pd = g_gxState.vtxDesc[GX_VA_POS];
++    if ((pd == GX_INDEX8 || pd == GX_INDEX16) && pa.data && vtxCount > 0) {
++      const u8* v = data + pos + matrix_index_prefix_size(fmt);
++      const u32 idx = pd == GX_INDEX8 ? v[0] : (bigEndian ? u32((v[0] << 8) | v[1]) : u32(v[0] | (v[1] << 8)));
++      posHex = fmt::format("idx {} ", idx);
++      if (idx * pa.stride + 12 <= pa.size)
++        for (u32 i = 0; i < 12; ++i) posHex += fmt::format("{:02x}", static_cast<const u8*>(pa.data)[idx * pa.stride + i]);
++    }
++    const auto& t0 = g_gxState.loadedTextures[0];
++    {
++      const auto& cc = g_gxState.colorChannelConfig;
++      const auto& ts = g_gxState.tevStages[0];
++      Log.warn("[ghost] chan C0 mat{} amb{} lit{} | A0 mat{} amb{} lit{} | vcd clr0 {} clr1 {} nrm {} | tev0 a {}/{}/{}/{} c {}/{}/{}/{} ka {} ras {}",
++               int(cc[GX_COLOR0].matSrc), int(cc[GX_COLOR0].ambSrc), int(cc[GX_COLOR0].lightingEnabled), int(cc[GX_ALPHA0].matSrc),
++               int(cc[GX_ALPHA0].ambSrc), int(cc[GX_ALPHA0].lightingEnabled), int(g_gxState.vtxDesc[GX_VA_CLR0]),
++               int(g_gxState.vtxDesc[GX_VA_CLR1]), int(g_gxState.vtxDesc[GX_VA_NRM]), int(ts.alphaPass.a), int(ts.alphaPass.b),
++               int(ts.alphaPass.c), int(ts.alphaPass.d), int(ts.colorPass.a), int(ts.colorPass.b), int(ts.colorPass.c), int(ts.colorPass.d),
++               int(ts.kaSel), int(ts.channelId));
++    }
++    Log.warn("[ghost] {} src {:08X} tex0 {}x{} f{} zloc {} dsta {:#x} k0a {:.2f} c0a {:.2f}", after ? "AFTER" : "SCOOBY", g_no100fCurList,
++             int(t0.width()), int(t0.height()), int(t0.format()), int(g_gxState.zCompLocBeforeTex), g_gxState.dstAlpha,
++             g_gxState.kcolors[0][3], g_gxState.colorRegs[1][3]);
++    Log.warn("[ghost] list {:08X} prim {:#x} fmt {} n {} vsz {} cull {} blend {}/{}/{} ac {}:{} {} {}:{} z {}/{}/{} tev {} chans {} mat {:.2f},{:.2f},{:.2f},{:.2f} "
++             "pnmtx {} T {:.1f},{:.1f},{:.1f} R0 {:.2f},{:.2f},{:.2f} proj {:.3f},{:.3f},{:.3f},{:.3f} posArr {} sz {} st {} | {}",
++             g_no100fGhostList, cmd, int(fmt), vtxCount, vtxSize, int(g_gxState.cullMode), int(g_gxState.blendMode),
++             int(g_gxState.blendFacSrc), int(g_gxState.blendFacDst), int(g_gxState.alphaCompare.comp0), g_gxState.alphaCompare.ref0,
++             int(g_gxState.alphaCompare.op), int(g_gxState.alphaCompare.comp1), g_gxState.alphaCompare.ref1, int(g_gxState.depthCompare),
++             int(g_gxState.depthUpdate), int(g_gxState.depthFunc), g_gxState.numTevStages, g_gxState.numChans, mat[0], mat[1], mat[2],
++             mat[3], g_gxState.currentPnMtx, pm[3], pm[7], pm[11], pm[0], pm[1], pm[2], proj[0], proj[5], proj[10], proj[11],
++             fmt::ptr(pa.data), pa.size, pa.stride, posHex);
++    {  // GHOST PROBE: colour array (alpha range) and the first vertex's bytes
++      const auto& ca = g_gxState.arrays[GX_VA_CLR0];
++      std::string clr, v0;
++      int amin = 256, amax = -1;
++      if (ca.data && ca.stride >= 4)
++        for (u32 o = 0; o + 4 <= ca.size; o += ca.stride) { const int a = static_cast<const u8*>(ca.data)[o + 3]; amin = std::min(amin, a); amax = std::max(amax, a); }
++      if (ca.data) for (u32 i = 0; i < std::min<u32>(16, ca.size); ++i) clr += fmt::format("{:02x}", static_cast<const u8*>(ca.data)[i]);
++      for (u32 i = 0; i < std::min<u32>(vtxSize, 16) && pos + i < size; ++i) v0 += fmt::format("{:02x}", data[pos + i]);
++      Log.warn("[ghost] clr0 arr {} sz {} st {} cnt {} type {} | a {}..{} | head {} | v0 {}", fmt::ptr(ca.data), ca.size, ca.stride,
++               int(g_gxState.vtxFmts[fmt].attrs[GX_VA_CLR0].cnt), int(g_gxState.vtxFmts[fmt].attrs[GX_VA_CLR0].type), amin, amax, clr, v0);
++    }
++    {  // GHOST PROBE: is the memoized pipeline the one this draw's state describes?
++      static PipelineConfig fresh;
++      fresh = {};
++      populate_pipeline_config(fresh, prim, static_cast<GXVtxFmt>(fmt));
++      const HashType freshHash = xxh3_hash(fresh, static_cast<HashType>(gfx::ShaderType::GX));
++      const auto& memo = resolve_pipeline_state(prim, static_cast<GXVtxFmt>(fmt));
++      const auto& sc = fresh.shaderConfig;
++      Log.warn("[ghost] pipe {} gen {} | fresh C0 mat{} lit{} A0 mat{} lit{} clr0attr {} cu {} au {}", memo.configHash == freshHash ? "OK" : "STALE",
++               g_gxState.pipelineStateGeneration, int(sc.colorChannels[0].matSrc), int(sc.colorChannels[0].lightingEnabled),
++               int(sc.colorChannels[1].matSrc), int(sc.colorChannels[1].lightingEnabled), int(sc.attrs[GX_VA_CLR0].attrType),
++               int(fresh.colorUpdate), int(fresh.alphaUpdate));
++    }
++  }
+   ++g_spmAudit[0];
+   {  // NO100F: where the draw sits in its buffer (env NO100F_VTX_IDX, dump frame only)
+     static const unsigned vtxIdx = [] { const char* e = std::getenv("NO100F_VTX_IDX"); return e ? unsigned(std::atoi(e)) : ~0u; }();
+@@ -3235,6 +3435,88 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+     if (flatTest == 10) for (int i = 0; i < 4; ++i) g_gxState.proj.m2.m[i] = i == 3 ? -0.95f * g_gxState.proj.m3.m[3] : 0.f;  // fixed depth, near side
+     g_gxState.pipelineStateGeneration = next_gx_state_epoch();
+   }
++  if (static const bool zfrz = std::getenv("NO100F_ZFRZ") != nullptr; zfrz) {  // ZFRZ PROBE: which draws run coplanar
++    static absl::flat_hash_map<u32, u64> frzDraws;
++    static u64 total = 0, frz = 0;
++    static auto last = std::chrono::steady_clock::now();
++    ++total;
++    if (g_gxState.zFreeze) {
++      ++frz;
++      ++frzDraws[g_no100fCurList];
++    }
++    if (const auto now = std::chrono::steady_clock::now(); now - last > std::chrono::seconds(5)) {
++      last = now;
++      std::string top;
++      for (const auto& [k, v] : frzDraws) top += fmt::format(" {:08X}:{}", k, v);
++      Log.warn("[zfrz] summary draws {} coplanar {} | plane {:.4f},{:.4f},{:.4f},{} |{}", total, frz, g_gxState.zFreezePlane.x(),
++               g_gxState.zFreezePlane.y(), g_gxState.zFreezePlane.z(), g_gxState.zFreezePlane.w(), top.substr(0, 600));
++      frzDraws.clear();
++      total = frz = 0;
++    }
++  }
++  // IDVIEW PROBE: while Play/ghost-idview.txt exists, every draw is painted opaque in a colour hashed from the display list
++  // it came from (raw/immediate draws: from their shape and texture), and each colour is logged once per toggle.
++  std::optional<std::pair<FogState, Vec4<float>>> idSave;
++  {
++    static bool idOn = false;
++    static auto lastPoll = std::chrono::steady_clock::time_point{};
++    static absl::flat_hash_set<u64> idLogged;
++    static absl::flat_hash_map<u32, u32> paintLists;  // list address (0 = raw/immediate draws) -> 0xRRGGBB
++    const auto now = std::chrono::steady_clock::now();
++    if (now - lastPoll > std::chrono::milliseconds(200)) {
++      lastPoll = now;
++      const bool was = idOn;
++      FILE* f = std::fopen("ghost-idview.txt", "rb");
++      idOn = f != nullptr;
++      if (f) std::fclose(f);
++      if (idOn && !was) idLogged.clear();
++      // ghost-paint.txt: "ADDR RRGGBB" hex pairs; only those lists are painted, the rest draw normally
++      paintLists.clear();
++      if (FILE* p = std::fopen("ghost-paint.txt", "rb")) {
++        unsigned a = 0, c = 0;
++        while (std::fscanf(p, "%x %x", &a, &c) == 2) paintLists[a] = c;
++        std::fclose(p);
++      }
++    }
++    const auto paintIt = paintLists.find(g_no100fCurList);
++    const bool paintThis = paintIt != paintLists.end();
++    if ((idOn || paintThis) && !flatSave) {
++      const auto& t0 = g_gxState.loadedTextures[0];
++      const u64 key = g_no100fCurList != 0 ? u64(g_no100fCurList)
++                                           : (u64(1) << 40) | (u64(vtxCount) << 16) | (u64(t0.width()) << 8) ^ u64(t0.height()) ^ (u64(prim) << 32);
++      u64 h = key * 0x9E3779B97F4A7C15ull;
++      h ^= h >> 29;
++      h *= 0xBF58476D1CE4E5B9ull;
++      h ^= h >> 32;
++      const u32 r = paintThis ? paintIt->second >> 16 & 0xFF : 48 + u32(h & 0xFF) % 208,
++                g = paintThis ? paintIt->second >> 8 & 0xFF : 48 + u32((h >> 8) & 0xFF) % 208,
++                b = paintThis ? paintIt->second & 0xFF : 48 + u32((h >> 16) & 0xFF) % 208;
++      if (idLogged.insert(key).second) {
++        float pm[12];
++        std::memcpy(pm, &g_gxState.pnMtx[g_gxState.currentPnMtx % MaxPnMtx].pos, sizeof(pm));
++        Log.warn("[idview] #{:02X}{:02X}{:02X} list {:08X} prim {:#x} fmt {} n {} tex0 {}x{} bl {}/{}/{} z {}/{}/{} cu {}{} T {:.1f},{:.1f},{:.1f}", r, g, b,
++                 g_no100fCurList, int(prim), int(fmt), vtxCount, t0.width(), t0.height(), int(g_gxState.blendMode),
++                 int(g_gxState.blendFacSrc), int(g_gxState.blendFacDst), int(g_gxState.depthCompare), int(g_gxState.depthUpdate),
++                 int(g_gxState.depthFunc), int(g_gxState.colorUpdate), int(g_gxState.alphaUpdate), pm[3], pm[7], pm[11]);
++      }
++      flatSave = FlatSave{g_gxState.tevStages[0], g_gxState.numTevStages, g_gxState.alphaCompare, g_gxState.blendMode,
++                          g_gxState.depthCompare, g_gxState.depthUpdate, g_gxState.cullMode, g_gxState.proj};
++      idSave = std::pair{g_gxState.fog, g_gxState.kcolors[0]};
++      auto& st = g_gxState.tevStages[0];
++      st.colorPass = {GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_KONST};
++      st.alphaPass = {GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_KONST};
++      st.kcSel = GX_TEV_KCSEL_K0;
++      st.kaSel = GX_TEV_KASEL_1;
++      st.colorOp = {};
++      st.alphaOp = {};
++      g_gxState.kcolors[0] = Vec4<float>{r / 255.f, g / 255.f, b / 255.f, 1.f};
++      g_gxState.numTevStages = 1;
++      g_gxState.alphaCompare = {};
++      g_gxState.blendMode = GX_BM_NONE;
++      g_gxState.fog.type = GX_FOG_NONE;
++      g_gxState.pipelineStateGeneration = next_gx_state_epoch();
++    }
++  }
+   // Callers hold the renderer GPU mutex for the whole drain (process() and submit_raw_draw); taking it again per draw only cost a recursive re-entry.
+   const auto& indexTemplate = cached_index_template(prim, vtxCount);
+   const u32 numIndices = indexTemplate.indexCount;
+@@ -3318,6 +3600,10 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+     g_gxState.depthUpdate = flatSave->du;
+     g_gxState.cullMode = flatSave->cull;
+     g_gxState.proj = flatSave->proj;
++    if (idSave) {  // IDVIEW PROBE
++      g_gxState.fog = idSave->first;
++      g_gxState.kcolors[0] = idSave->second;
++    }
+     g_gxState.pipelineStateGeneration = next_gx_state_epoch();
+     g_gxState.stateDirty = true;
+   }
+diff --git a/wiicompiled/aurora-main/lib/gx/command_processor.hpp b/wiicompiled/aurora-main/lib/gx/command_processor.hpp
+index 25fe6bd..d4bb16d 100644
+--- a/wiicompiled/aurora-main/lib/gx/command_processor.hpp
++++ b/wiicompiled/aurora-main/lib/gx/command_processor.hpp
+@@ -7,6 +7,7 @@ namespace aurora::gx::fifo {
+ 
+ // Reset the CP write-deduplication state whenever the GX shadow state is reinitialized.
+ void reset_cp_register_cache();
++void no100f_probe_list_start();  // LISTSTART PROBE
+ 
+ // True while a recorded display list is being replayed. The game's SDK never flushes deferred state (genMode) into a
+ // list, so genMode copies Aurora recorded must not switch coplanar mode off (SPM mi1_01 front grass).
+diff --git a/wiicompiled/runtime/src/hle/gx/gx_dl.cpp b/wiicompiled/runtime/src/hle/gx/gx_dl.cpp
+index b123221..27d6e86 100644
+--- a/wiicompiled/runtime/src/hle/gx/gx_dl.cpp
++++ b/wiicompiled/runtime/src/hle/gx/gx_dl.cpp
+@@ -7,6 +7,8 @@ extern "C" void aurora_spm_vtx_state(uint8_t* desc26, uint8_t* fmt8x26x3);
+ 
+ #include <cstdlib>
+ #include <unordered_map>
++#include <unordered_set>
++#include <chrono>
+ 
+ // The display-list scan cache validates a cached scan against the live guest
+ // bytes with a 64-bit XXH3 digest (see GxDisplayListScanCache::CanReuse).
+@@ -543,7 +545,8 @@ struct DlScanCacheProbe {
+ static DlScanCacheProbe ProbeDlScanCache(const uint8_t* list, uint32_t listAddr, uint32_t nbytes,
+                                          uint64_t layoutHash) {
+     DlScanCacheProbe probe{};
+-    probe.writeGeneration = GxGuestWrite::GenerationForRange(listAddr, nbytes);
++    static const bool noWg = std::getenv("NO100F_NO_WG_DL") != nullptr;  // WRITEGEN PROBE: re-digest every list
++    probe.writeGeneration = noWg ? kDlWriteGenerationUntracked : GxGuestWrite::GenerationForRange(listAddr, nbytes);
+ 
+     auto& s_cache = DlScanCache();
+     const uint64_t key = DlScanCacheKey(listAddr, nbytes, layoutHash);
+@@ -1325,8 +1328,158 @@ extern "C" void GxNotifyDisplayListMemoryWrite(uint32_t addr, uint32_t size) {
+     return false;
+ }
+ 
++// STATECHECK PROBE: lets Aurora read the game's own __GXData (r13-0x7DB8) at draw time.
++extern "C" bool (*g_no100fGuestGxRead)(unsigned off, unsigned* out);
++extern "C" void no100f_aurora_pending(unsigned* dirty, unsigned* vnum, unsigned* fifoBytes, const unsigned char** fifoData);  // PENDING PROBE
++static bool No100fReadGuestGx(unsigned off, unsigned* out) {
++    const CpuContext* x = TryGetCpuContext();
++    uint32_t gx = 0, v = 0;
++    if (!x || !Memory::TryRead32(x->gpr[13] - 0x7DB8u, gx) || !gx || !Memory::TryRead32(gx + off, v)) return false;
++    *out = v;
++    return true;
++}
++static const bool s_no100fGuestGxReadSet = [] { g_no100fGuestGxRead = &No100fReadGuestGx; return true; }();
++
++// BUILDVCD PROBE: build-time VCD per list address, checked at call time.
++static std::unordered_map<uint32_t, std::pair<uint32_t, uint32_t>> s_buildVcd;
++void No100fRecordBuildVcd(uint32_t list, uint32_t lo, uint32_t hi) {
++    s_buildVcd[list & 0x1FFFFFFFu] = {lo, hi};
++    static uint32_t n = 0;
++    if (++n <= 400) RT_LOGF(RT_TAG_GX, "[buildvcd] #%u list %08X lo %05X hi %04X\n", n, list, lo, hi);
++}
++
++// CONTENT PROBE: a copy of each recorded list, compared against guest memory when it is called.
++struct No100fBuiltList { std::vector<uint8_t> bytes; uint32_t calls = 0, logged = 0; };
++static std::unordered_map<uint32_t, No100fBuiltList> s_builtLists;
++void No100fRecordBuiltList(uint32_t list, uint32_t count) {
++    auto& e = s_builtLists[list & 0x1FFFFFFFu];
++    e = {};
++    e.bytes.resize(count);
++    for (uint32_t i = 0; i < count; ++i) e.bytes[i] = Memory::Read8(list + i);
++}
++static void No100fCheckBuiltList(uint32_t listAddr, uint32_t nbytes) {
++    const auto it = s_builtLists.find(listAddr & 0x1FFFFFFFu);
++    if (it == s_builtLists.end()) return;
++    auto& e = it->second;
++    if ((e.calls++ & 31u) != 0 || e.logged >= 4) return;
++    const uint32_t n = std::min<uint32_t>(nbytes, uint32_t(e.bytes.size()));
++    uint32_t first = ~0u, last = 0, diff = 0;
++    for (uint32_t i = 0; i < n; ++i)
++        if (Memory::Read8(listAddr + i) != e.bytes[i]) { first = std::min(first, i); last = i; ++diff; }
++    if (nbytes != e.bytes.size() || diff) {
++        ++e.logged;
++        std::string was, now;
++        if (diff)
++            for (uint32_t i = first; i <= last && i < first + 48; ++i) {
++                char b[4];
++                std::snprintf(b, sizeof b, "%02x", e.bytes[i]); was += b;
++                std::snprintf(b, sizeof b, "%02x", Memory::Read8(listAddr + i)); now += b;
++            }
++        RT_LOGF(RT_TAG_GX, "[content] list %08X built %zu called %u | %u bytes differ, +%u..+%u | was %s | now %s\n", listAddr,
++                e.bytes.size(), nbytes, diff, diff ? first : 0u, last, was.c_str(), now.c_str());
++    }
++}
++
++// GHOST PROBE: lists built for the ghost model; their draws are dumped for one frame every 2 s.
++extern "C" unsigned g_no100fGhostList, g_no100fCurList;
++extern "C" int g_no100fAfterScooby, g_no100fFrameDump;
++static std::unordered_set<uint32_t> s_ghostLists;
++static uint32_t s_lastGhostList = 0, s_firstGhostList = 0;
++void No100fMarkGhostList(uint32_t list) {
++    if (s_ghostLists.empty()) s_firstGhostList = list & 0x1FFFFFFFu;
++    s_ghostLists.insert(list & 0x1FFFFFFFu);
++    s_lastGhostList = list & 0x1FFFFFFFu;
++    RT_LOGF(RT_TAG_GX, "[ghost] list %08X belongs to the ghost model (%zu)\n", list, s_ghostLists.size());
++}
++
+ extern "C" void GX__CallDisplayList_80172f64(uint32_t listAddr, uint32_t nbytes) {
+     if (nbytes == 0 || listAddr == 0) return;
++    struct GhostScope {
++        uint32_t prevList = g_no100fCurList;
++        bool armAfter = false;
++        GhostScope(uint32_t addr) {
++            g_no100fCurList = addr;
++            if (!s_ghostLists.count(addr & 0x1FFFFFFFu)) return;
++            if ((addr & 0x1FFFFFFFu) == s_firstGhostList && g_no100fFrameDump > 0) g_no100fFrameDump = 0;  // FRAME PROBE: one frame, Scooby to Scooby
++            using Clock = std::chrono::steady_clock;
++            static Clock::time_point windowStart{};
++            const auto now = Clock::now();
++            if (now - windowStart > std::chrono::seconds(2)) windowStart = now;
++            if (now - windowStart < std::chrono::milliseconds(30)) {
++                g_no100fGhostList = addr;
++                if ((addr & 0x1FFFFFFFu) == s_firstGhostList) g_no100fFrameDump = 8000;
++                armAfter = (addr & 0x1FFFFFFFu) == s_lastGhostList;
++            }
++        }
++        ~GhostScope() {
++            g_no100fGhostList = 0;
++            g_no100fCurList = prevList;
++            if (armAfter) g_no100fAfterScooby = 40;
++        }
++    } ghostScope{listAddr};
++    No100fCheckBuiltList(listAddr, nbytes);  // CONTENT PROBE
++    if (s_ghostLists.count(listAddr & 0x1FFFFFFFu)) {  // PENDING PROBE: what a forward's flush+drain would do here
++        unsigned dirty = 0, vnum = 0, fifoBytes = 0;
++        const unsigned char* fifo = nullptr;
++        no100f_aurora_pending(&dirty, &vnum, &fifoBytes, &fifo);
++        static std::unordered_map<std::string, uint32_t> seen;
++        std::string ops;
++        for (unsigned i = 0; i < fifoBytes && i < 48; ++i) { char b[4]; std::snprintf(b, sizeof b, "%02x", fifo[i]); ops += b; }
++        const std::string key = std::to_string(dirty) + "/" + std::to_string(vnum) + "/" + std::to_string(fifoBytes) + ops.substr(0, 4);
++        if (seen[key]++ % 2000 == 0)
++            RT_LOGF(RT_TAG_GX, "[pending] list %08X aurora dirty %X vNum %u fifo %u bytes %s (seen %u)\n", listAddr, dirty, vnum, fifoBytes,
++                    ops.c_str(), seen[key]);
++    }
++    if (s_ghostLists.count(listAddr & 0x1FFFFFFFu)) {  // LAYOUT PROBE: Scooby's lists vs the arrays behind them
++        static std::unordered_map<uint32_t, int> seen;
++        if (seen[listAddr]++ % 600 == 0) {
++            const auto& vd = g_hleGxState.vtxDesc;
++            const auto& va = g_hleGxState.vtxArray;
++            auto hex = [](uint32_t a, uint32_t n) { std::string s; for (uint32_t i = 0; i < n; ++i) { char b[4]; std::snprintf(b, sizeof b, "%02x", Memory::Read8(a + i)); s += b; } return s; };
++            const uint32_t tail = nbytes > 32 ? listAddr + nbytes - 32 : listAddr;
++            RT_LOGF(RT_TAG_GX, "[layout] list %08X n %u end %08X | vcd pos %d nrm %d clr0 %d | pos %08X nrm %08X clr0 %08X | head %s | tail %s\n", listAddr,
++                    nbytes, listAddr + nbytes, int(vd[GX_VA_POS]), int(vd[GX_VA_NRM]), int(vd[GX_VA_CLR0]), va[GX_VA_POS].base, va[GX_VA_NRM].base,
++                    va[GX_VA_CLR0].base, hex(listAddr, 16).c_str(), hex(tail, 32).c_str());
++        }
++    }
++    if (auto it = s_buildVcd.find(listAddr & 0x1FFFFFFFu); it != s_buildVcd.end()) {
++        const auto& vd = g_hleGxState.vtxDesc;
++        uint32_t hLo = 0, hHi = 0;
++        for (int i = GX_VA_PNMTXIDX; i <= GX_VA_TEX7MTXIDX; ++i) hLo |= (vd[i] != GX_NONE ? 1u : 0u) << i;
++        hLo |= (uint32_t(vd[GX_VA_POS]) & 3u) << 9 | (uint32_t(vd[GX_VA_NRM]) & 3u) << 11 | (uint32_t(vd[GX_VA_CLR0]) & 3u) << 13 |
++               (uint32_t(vd[GX_VA_CLR1]) & 3u) << 15;
++        for (int t = 0; t < 8; ++t) hHi |= (uint32_t(vd[GX_VA_TEX0 + t]) & 3u) << (t * 2);
++        static uint32_t nCalls = 0, nBad = 0;
++        static std::unordered_map<uint64_t, uint32_t> seenBad;
++        ++nCalls;
++        if (hLo != it->second.first || hHi != it->second.second) {
++            ++nBad;
++            const uint64_t key = (uint64_t(listAddr) << 32) | (uint64_t(hLo) << 16) ^ hHi;
++            if (seenBad[key]++ == 0 && seenBad.size() <= 200)
++                RT_LOGF(RT_TAG_GX, "[buildvcd] MISMATCH list %08X n %u | built lo %05X hi %04X | drawn lo %05X hi %04X (call %u)\n", listAddr,
++                        nbytes, it->second.first, it->second.second, hLo, hHi, nCalls);
++        }
++        if ((nCalls % 50000) == 0) RT_LOGF(RT_TAG_GX, "[buildvcd] %u builder-list calls, %u mismatched\n", nCalls, nBad);
++    }
++    if (const CpuContext* x = TryGetCpuContext()) {  // VCDSYNC PROBE: game's __GXData VCD vs the HLE copy about to be published
++        uint32_t gx = 0, lo = 0, hi = 0, dirty = 0;
++        if (Memory::TryRead32(x->gpr[13] - 0x7DB8u, gx) && gx && Memory::TryRead32(gx + 0x14u, lo) && Memory::TryRead32(gx + 0x18u, hi) &&
++            Memory::TryRead32(gx + 0x4F4u, dirty)) {
++            const auto& vd = g_hleGxState.vtxDesc;
++            uint32_t hLo = 0, hHi = 0;
++            for (int i = GX_VA_PNMTXIDX; i <= GX_VA_TEX7MTXIDX; ++i) hLo |= (vd[i] != GX_NONE ? 1u : 0u) << i;
++            hLo |= (uint32_t(vd[GX_VA_POS]) & 3u) << 9 | (uint32_t(vd[GX_VA_NRM]) & 3u) << 11 | (uint32_t(vd[GX_VA_CLR0]) & 3u) << 13 |
++                   (uint32_t(vd[GX_VA_CLR1]) & 3u) << 15;
++            for (int t = 0; t < 8; ++t) hHi |= (uint32_t(vd[GX_VA_TEX0 + t]) & 3u) << (t * 2);
++            static uint32_t nCalls = 0, nBad = 0;
++            ++nCalls;
++            const bool bad = (lo & 0x1FFFFu) != hLo || (hi & 0xFFFFu) != hHi;
++            if (bad && ++nBad <= 40)
++                RT_LOGF(RT_TAG_GX, "[vcdsync] mismatch #%u/%u list %08X n %u | game lo %05X hi %04X dirty %X | hle lo %05X hi %04X\n", nBad,
++                        nCalls, listAddr, nbytes, lo & 0x1FFFFu, hi & 0xFFFFu, dirty, hLo, hHi);
++            if ((nCalls % 100000) == 0) RT_LOGF(RT_TAG_GX, "[vcdsync] %u calls, %u mismatches\n", nCalls, nBad);
++        }
++    }
+     static const int s_skipId = std::getenv("SPM_SKIP_MATDL") ? std::atoi(std::getenv("SPM_SKIP_MATDL")) : -1;  // diagnostic: drop the geometry list drawn after material list <id>
+     static bool s_skipNext = false;
+     try {
+@@ -1466,7 +1619,8 @@ extern "C" void GX__CallDisplayList_80172f64(uint32_t listAddr, uint32_t nbytes)
+             scanOk = ScanDisplayListMaxIndices(list, nbytes, maxIdx, sawIdx, maxXfIdx, maxXfBytes, sawXfIdx,
+                                                &dlVtxFmt, &dlVtxFmtMixed, &dlHasNestedDl,
+                                                &dlHasArrayStateWrites, &dlHasCpWrites, &cpWrites);
+-            needsFlatten = dlHasNestedDl || dlHasArrayStateWrites || dlHasCpWrites;
++            static const bool forceFlatten = std::getenv("NO100F_FORCE_FLATTEN") != nullptr;  // FLATTEN PROBE
++            needsFlatten = forceFlatten || dlHasNestedDl || dlHasArrayStateWrites || dlHasCpWrites;
+             bool flattenVerbatim = true;
+             auto& flattened = FlattenDisplayListScratch();
+             if (needsFlatten) {
+@@ -1552,6 +1706,32 @@ extern "C" void GX__CallDisplayList_80172f64(uint32_t listAddr, uint32_t nbytes)
+                 EnsureAuroraFrameActive();
+                 GXMarkFrameWork();
+                 GXCallDisplayList(list, nbytes);
++                {  // LIVEVTX PROBE: the layout Aurora decoded this CP-write-free list with vs the HLE layout it was meant to get
++                    static uint32_t nLists = 0, nBad = 0;
++                    static std::unordered_map<uint64_t, uint32_t> seenBad;
++                    uint8_t desc[26], vat[8 * 26 * 3];
++                    aurora_spm_vtx_state(desc, vat);
++                    ++nLists;
++                    std::string why;
++                    for (int a = GX_VA_PNMTXIDX; a <= GX_VA_TEX7; ++a) {
++                        const auto want = g_hleGxState.vtxDesc[a];
++                        if (desc[a] != uint8_t(want)) why += " vcd" + std::to_string(a) + ":" + std::to_string(desc[a]) + "!=" + std::to_string(int(want));
++                        if (want == GX_NONE || IsMatrixIndexAttr(GXAttr(a)) || dlVtxFmt >= GX_MAX_VTXFMT) continue;
++                        const auto& f = g_hleGxState.vtxAttrFmt[dlVtxFmt][a];
++                        const uint8_t* o = vat + (dlVtxFmt * 26 + a) * 3;
++                        const bool fracMatters = a == GX_VA_POS || a >= GX_VA_TEX0;
++                        if (o[0] != uint8_t(f.cnt) || o[1] != uint8_t(f.type) || (fracMatters && o[2] != f.frac))
++                            why += " vat" + std::to_string(a) + ":" + std::to_string(o[0]) + "/" + std::to_string(o[1]) + "/" + std::to_string(o[2]) +
++                                   "!=" + std::to_string(int(f.cnt)) + "/" + std::to_string(int(f.type)) + "/" + std::to_string(int(f.frac));
++                    }
++                    if (!why.empty()) {
++                        ++nBad;
++                        const uint64_t key = (uint64_t(listAddr) << 32) ^ std::hash<std::string>{}(why);
++                        if (seenBad[key]++ == 0 && seenBad.size() <= 300)
++                            RT_LOGF(RT_TAG_GX, "[livevtx] list %08X n %u fmt %d%s (call %u)\n", listAddr, nbytes, int(dlVtxFmt), why.c_str(), nLists);
++                    }
++                    if ((nLists % 200000) == 0) RT_LOGF(RT_TAG_GX, "[livevtx] %u plain list calls, %u decoded with a different layout\n", nLists, nBad);
++                }
+ 
+                 SyncAppliedVtxStateFromHleReal();
+                 return;
+diff --git a/wiicompiled/runtime/src/hle/gx/gx_fifo.cpp b/wiicompiled/runtime/src/hle/gx/gx_fifo.cpp
+index 26eb176..d7caaaf 100644
+--- a/wiicompiled/runtime/src/hle/gx/gx_fifo.cpp
++++ b/wiicompiled/runtime/src/hle/gx/gx_fifo.cpp
+@@ -41,20 +41,84 @@ PPC_NATIVE_OVERRIDE_VOID(800FCBDC, No100f_GXEnableBreakPt, (uint32_t breakPt), (
+ // The engine's list builder (0x8015E944) sizes each list for the draw alone and lays the vertex arrays out right
+ // after it; state recorded at the list's GXBegin pushed the last indices into those arrays, which then overwrote them.
+ extern "C" void func_800FE204(CpuContext* ctx);  // the game's __GXSetDirtyState
++void No100fRecordBuildVcd(uint32_t list, uint32_t lo, uint32_t hi);  // BUILDVCD PROBE (gx_dl.cpp)
++void No100fMarkGhostList(uint32_t list);  // GHOST PROBE (gx_dl.cpp)
++void No100fRecordBuiltList(uint32_t list, uint32_t count);  // CONTENT PROBE (gx_dl.cpp)
++static uint32_t g_no100fLegacyList = 0;  // STRIP PROBE: list whose GXBegin recorded the legacy dirty state
+ extern "C" void No100f_GXBeginDisplayList(uint32_t list, uint32_t size) {
++    g_no100fLegacyList = 0;
++    bool lastBeginWasDirty = false;  // GHOST PROBE
+     if (CpuContext* ctx = TryGetCpuContext()) {
+         uint32_t gx = 0, dirty = 0;
+         if (Memory::TryRead32(ctx->gpr[13] - 0x7DB8u, gx) && gx && Memory::TryRead32(gx + 0x4F4u, dirty) && dirty) {
+-            func_800FE204(ctx);
++            lastBeginWasDirty = true;
++            // DLSTATE PROBE: NO100F_DL_LEGACY=<mask> leaves those dirty bits for the list's GXBegin to record (pre-#8)
++            static const uint32_t legacyAll = [] { const char* e = std::getenv("NO100F_DL_LEGACY"); return e ? uint32_t(std::strtoul(e, nullptr, 0)) : 0u; }();
++            static uint32_t seen[32] = {}, n = 0;
++            ++n;
++            // NO100F_DL_LEGACY_RANGE=a-b: apply NO100F_DL_LEGACY only to dirty Begins a..b (1-based)
++            static const std::pair<uint32_t, uint32_t> range = [] {
++                const char* e = std::getenv("NO100F_DL_LEGACY_RANGE");
++                uint32_t a = 0, b = ~0u;
++                if (e) { a = uint32_t(std::strtoul(e, nullptr, 10)); const char* d = std::strchr(e, '-'); b = d ? uint32_t(std::strtoul(d + 1, nullptr, 10)) : a; }
++                return std::pair<uint32_t, uint32_t>{a, b};
++            }();
++            const uint32_t legacy = (n >= range.first && n <= range.second) ? legacyAll : 0u;
++            for (int b = 0; b < 32; ++b) if (dirty & (1u << b)) ++seen[b];
++            if (n <= 200)
++                RT_LOGF(RT_TAG_GX, "[dlstate] #%u list %08X size %u dirty %X legacy %X | bit counts 1:%u 2:%u 4:%u 8:%u 10:%u\n", n, list, size,
++                        dirty, legacy, seen[0], seen[1], seen[2], seen[3], seen[4]);
++            g_no100fLegacyList = legacy ? list : 0u;  // STRIP PROBE
++            if (dirty & ~legacy) {
++                Memory::Write32(gx + 0x4F4u, dirty & ~legacy);
++                func_800FE204(ctx);
++                Memory::Write32(gx + 0x4F4u, dirty & legacy);
++            }
+         }
+     }
++    {  // GHOST PROBE: the ghost model is the one whose first (dirty) list is 1504 bytes; tag all its lists
++        static bool ghostModel = false;
++        if (lastBeginWasDirty) ghostModel = size == 1504;
++        if (ghostModel) No100fMarkGhostList(list);
++    }
++    if (CpuContext* ctx = TryGetCpuContext()) {  // BUILDVCD PROBE: remember each list's build-time VCD
++        uint32_t gx = 0, lo = 0, hi = 0;
++        if (Memory::TryRead32(ctx->gpr[13] - 0x7DB8u, gx) && gx && Memory::TryRead32(gx + 0x14u, lo) && Memory::TryRead32(gx + 0x18u, hi))
++            No100fRecordBuildVcd(list, lo & 0x1FFFFu, hi & 0xFFFFu);
++    }
+     try { Memory::Write8(kDlFifoAddr + kDlWrapFlagOffset, 0); } catch (const Memory::AccessViolation&) {}
+     BeginDisplayListRecording(list, size);
+ }
+ PPC_NATIVE_OVERRIDE_VOID(801022C8, No100f_GXBeginDisplayList, (uint32_t list, uint32_t size), (list, size));
+ 
+ extern "C" uint32_t No100f_GXEndDisplayList() {
++    static const bool noPad = std::getenv("NO100F_DL_NOPAD") != nullptr;  // PAD PROBE: old unpadded size
++    if (!noPad && g_dlRecordState.active)
++        while (g_dlRecordState.count & 31u) WriteDisplayListData(0, 1);
+     const uint32_t count = g_dlRecordState.count;
++    if (g_no100fLegacyList) {  // STRIP PROBE: NO100F_DL_STRIP=cp|xf|all NOPs those writes of the legacy prefix (size kept)
++        static const char* strip = std::getenv("NO100F_DL_STRIP");
++        std::string log;
++        uint32_t p = g_no100fLegacyList;
++        const uint32_t end = p + count;
++        while (p < end) {
++            const uint8_t op = Memory::Read8(p);
++            uint32_t len = 0;
++            bool cp = false;
++            if (op == 0x08) { len = 6; cp = true; }
++            else if (op == 0x10) len = 5 + 4 * ((Memory::Read32(p + 1) >> 16) + 1);
++            else break;
++            char b[64];
++            std::snprintf(b, sizeof b, " %s %08X=%08X", cp ? "CP" : "XF", cp ? Memory::Read8(p + 1) : Memory::Read32(p + 1), Memory::Read32(p + len - 4));
++            log += b;
++            const bool kill = strip && (!std::strcmp(strip, "all") || (cp && !std::strcmp(strip, "cp")) || (!cp && !std::strcmp(strip, "xf")));
++            if (kill) for (uint32_t i = 0; i < len; ++i) Memory::Write8(p + i, 0);
++            p += len;
++        }
++        RT_LOGF(RT_TAG_GX, "[strip] list %08X prefix%s | strip %s\n", g_no100fLegacyList, log.c_str(), strip ? strip : "none");
++        g_no100fLegacyList = 0;
++    }
++    No100fRecordBuiltList(g_dlRecordState.base, count);  // CONTENT PROBE
+     EndDisplayListRecording();
+     uint8_t wrapped = 0;
+     try { wrapped = Memory::Read8(kDlFifoAddr + kDlWrapFlagOffset); } catch (const Memory::AccessViolation&) {}
+diff --git a/wiicompiled/runtime/src/hle/gx/gx_guest_write_hooks.cpp b/wiicompiled/runtime/src/hle/gx/gx_guest_write_hooks.cpp
+index 315526c..acb8583 100644
+--- a/wiicompiled/runtime/src/hle/gx/gx_guest_write_hooks.cpp
++++ b/wiicompiled/runtime/src/hle/gx/gx_guest_write_hooks.cpp
+@@ -7,6 +7,7 @@
+ 
+ #include <array>
+ #include <cstdio>
++#include <cstdlib>
+ 
+ namespace GxGuestWrite {
+ namespace {
+@@ -66,6 +67,10 @@ GuestRamAlias ResolveAlias(uint32_t guestBase, size_t size) noexcept {
+ } // namespace
+ 
+ void InstallAuroraHooks() {
++    if (std::getenv("NO100F_NO_WG_AURORA")) {  // WRITEGEN PROBE: aurora re-digests every source
++        RT_LOGF(RT_TAG_GX, "[writegen] aurora hooks not installed (NO100F_NO_WG_AURORA)\n");
++        return;
++    }
+     g_aliases[0] = ResolveAlias(Memory::kMem1CachedBase, Memory::kMem1Size);
+     g_aliases[1] = ResolveAlias(Memory::kMem2CachedBase, Memory::kMem2Size);
+     if (g_aliases[0].hostBase == nullptr || g_aliases[1].hostBase == nullptr) {
