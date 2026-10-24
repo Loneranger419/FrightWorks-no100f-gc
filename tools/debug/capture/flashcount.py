@@ -2,8 +2,10 @@
 
 Duplicate frames (capture faster than the game) are dropped first; frame indices are in unique-frame numbering (for triplet.py).
 """
-import sys, subprocess, numpy as np
-FF, FP = r'C:\Utilities\ffmpeg\bin\ffmpeg', r'C:\Utilities\ffmpeg\bin\ffprobe'
+import os, sys, subprocess, numpy as np
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import ffbin
+FF, FP = ffbin.ffmpeg(), ffbin.ffprobe()
 f = sys.argv[1]
 W, H = map(int, subprocess.run([FP, '-v', 'error', '-select_streams', 'v:0', '-show_entries',
                                 'stream=width,height', '-of', 'csv=p=0', f], capture_output=True, text=True).stdout.strip().split(','))
