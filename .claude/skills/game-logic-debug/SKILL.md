@@ -50,8 +50,38 @@ Start-Process 'Play\Scooby-Doo Refrightened.exe' -WorkingDirectory Play   # not 
 - Spots: with `postool.patch` built in, **F9** (global hotkey) appends Scooby's position + yaw to `Play/postool/spots.txt`
   (beeps). Copy good ones to `tools/debug/game/spots.txt` (i004 grate spots are there). F9 saves the feet; mkhip adds 0.3 to Y.
 - NPCs: clearing `baseFlags & 1` does nothing (NPC code ignores it), so mkhip moves them to (2000+50i, -500, 2000).
-- Poking Scooby's matrix live doesn't stick (physics rewrites it); use the spawn.
+- Poking only Scooby's matrix doesn't stick (the frame rebuilds it); the dev menu's teleport (below) does, or use the spawn.
 - Clean up afterwards: delete `Play\UserData\mods\zz-manual`, copy `tools\debug\local\Config.user.toml` back.
+
+## Dev menu (`tools/debug/patches/devmenu.patch`, `no100f_devmenu.cpp`)
+
+Run: `powershell -ExecutionPolicy Bypass -File tools\debug\play-patched.ps1` applies the patch, builds, starts the game
+and takes the patch out of the source when the game closes (`-SkipTranslate` only if the last build was this branch;
+`-CleanBuild` rebuilds `Play\` without it afterwards; `-Keep` to work on the menu, then re-export the patch and `-Remove`).
+
+**F8** in game: current scene + Scooby's position, go to any scene (start position), save/delete spots and go to them
+(another scene loads first), god mode (no damage, green Scooby), Monsters tab (all off in every scene, or one
+by one in this scene). Spots: `UserData/devmenu_spots.txt` (`I004 x y z yawRad name`). Scriptable through
+`Play/devmenu.txt` (every 30 frames while in play, then deleted; results in `Play/devmenu.log`): `scene ID`, `spot NAME`,
+`save NAME`, `tp X Y Z [YAWDEG]`, `where`, `peek ADDR [N]`, `frame`, `god on|off`, `monsters [on|off]` (list / all),
+`monster N|NAME on|off`, `ents` (scene entity list). Doesn't touch warp flags or the save file.
+
+- Scene switch = the game's portal path: write a portal + asset (+0x08 camera, +0x0C marker, +0x10 yaw deg, +0x14 scene ID)
+  in a reserved page (0x816FF000, lowers the arena by 4 KB) and set the pending portal `[[0x80245CF4]+0x70]`. The scene
+  update fades out (state 4), handler `0x800ACD30` (mode 0xB, state 5) loads it. Marker 0 = the scene's own start.
+- Teleport: player entity frame `[0x802453C8]`: matrix (pos +0x30), previous pos +0x80, yaw angles +0xA4 and +0xC4; plus the
+  model matrix `[[0x802453B4]+0x20]` and the camera target (0x801BD0A0/AC). Writing only the matrix gets rebuilt.
+- In play = mode `[0x80270E18]` 0xB and state `[0x802703C8]` 1. Current scene ID `[[0x80245CF4]+0x6C]`.
+- God mode: sd2.ini `TakeDamage` lives at `0x802459B4` (globals + 0x824) and is read on every hit (`0x8005A430`: health
+  +0x2E8 -= damage only when nonzero); held at 0. Tint: player instances `[0x802453B4]` (+0 next, +0x10 RpAtomic), geometry
+  `[atomic+0x18]`: flags +8 `|= 0x40` (modulate material colour), materials `[geom+0x20]` x `[geom+0x24]`, colour RGBA at
+  `mat+4` (`0x78FF78FF` = green). Scooby has 12 atomics, one material each, all `FFFFFFFF`.
+- Monsters = base type 0x02 (NPC) in the scene list `[scene+0x78]` x `[scene+0x74]` (gang NPCs like SHAGGYRUN too).
+  Entity: +0x10 asset (first word = ID), +0x2C model instances (+0x20 matrix), +0x30 update (null = the scene loop skips it),
+  +0x40 frame, +0x4C bound centre. Off = update nulled + parked at (2000+50i, -500, 2000) every frame; on = restored. Names:
+  the scene HIP's ADBG records (`files/<L>0/<id>.HIP`, type `NPC `).
+- The game's own warp gates: table 0x801C68B0 (26 x {index, unlocked, scene}); unlock-all `0x8004C690` (only called by a
+  blanked-out cheat). Pause map rooms (`E 05 SELECTED`) only pick the stats shown, they don't warp.
 
 ## postool (`tools/debug/patches/postool.patch`, `hle/vi.cpp`)
 

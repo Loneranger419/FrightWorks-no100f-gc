@@ -24,6 +24,7 @@ unless noted; if one stops applying after upstream moves, use `git apply -3`, fi
 | `clear-magenta-diagnostic` | `NO100F_CLEAR_MAGENTA` EFB clear colour (holes vs coloured pixels) | `hle-divergence-debug` |
 | `fogstat-probes` | While `Play/fogstat.txt` exists: per-frame blended draw counts/coverage, guest backtrace per raw draw, i004 fog quads | `game-logic-debug` |
 | `postool` | `Play/postool.txt` commands (dump/peek/poke/trace/births) + F9 spot save | `game-logic-debug` |
+| `devmenu` | F8 dev menu: go to any scene, saved spots, god mode, monsters off, `Play/devmenu.txt` commands. New `no100f_devmenu.*` + hooks in `settings_overlay.cpp`; also applies to `release/1.0.3-beta`. `tools/play-patched.ps1` applies it for one play session | `game-logic-debug` |
 | `audio-diagnostic` | `AX_DIAG_DIR` per-stage audio dumps, `AX_HEADROOM_DB` | `audio-debug` |
 | `real-date` | `NO100F_REAL_DATE=1` real clock for builds without PR #12 | — |
 | `yn-bisect-harness` | Toast + Y/N keys, `STICK_*` input script + `curtain-stick.txt`, GPU owner dump, event skip / flat-paint files, old curtain tracers and env skips | this skill |

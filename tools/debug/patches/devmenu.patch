@@ -1,0 +1,852 @@
+diff --git a/wiicompiled/runtime/include/no100f_devmenu.h b/wiicompiled/runtime/include/no100f_devmenu.h
+new file mode 100644
+index 0000000..dcd0857
+--- /dev/null
++++ b/wiicompiled/runtime/include/no100f_devmenu.h
+@@ -0,0 +1,12 @@
++#pragma once
++
++#include <SDL3/SDL_events.h>
++
++// DEBUG dev menu (F8): teleport to any scene, save spots (scene + position + yaw) and teleport back to them.
++// Local test builds only (tools/debug/patches/devmenu.patch); not part of any PR.
++namespace no100f_devmenu {
++void HandleSdlEvent(const SDL_Event& event) noexcept;
++// Called from settings_overlay::Draw (game thread, once per GXCopyDisp, inside the ImGui frame).
++void Draw() noexcept;
++bool IsOpen() noexcept;
++} // namespace no100f_devmenu
+diff --git a/wiicompiled/runtime/src/no100f_devmenu.cpp b/wiicompiled/runtime/src/no100f_devmenu.cpp
+new file mode 100644
+index 0000000..6b26e33
+--- /dev/null
++++ b/wiicompiled/runtime/src/no100f_devmenu.cpp
+@@ -0,0 +1,780 @@
++// DEBUG dev menu (F8) for Scooby-Doo! Night of 100 Frights: teleport to any scene, save spots and go back to them,
++// god mode, monsters off.
++//
++// Scene switch: the game travels through a portal by setting the current scene's pending portal ([scene+0x70]);
++// the scene update (0x800CEB30) then fades out and the switch handler (0x800ACD30, state 0xB/5) reads the portal's
++// asset (+0x08 camera ID, +0x0C spawn marker ID, +0x10 yaw in degrees, +0x14 scene ID) and loads that scene.
++// The menu writes its own portal + asset into a reserved MEM1 page and sets the pending portal. Marker 0 = the
++// scene's own start position; the yaw always overrides the player asset's (0x800ACFC4).
++//
++// Spot teleport (same scene): what the scene setup does at spawn (0x800AD02C): player model matrix pos, player frame
++// pos, camera follow target (0x8001E938). A spot in another scene switches first, then teleports once the new scene
++// has been in play for a few frames.
++//
++// God mode: TakeDamage from sd2.ini (globals + 0x824) is read on every hit (0x8005A430 only subtracts the damage from
++// health +0x2E8 when it's nonzero); the menu holds it at 0. Scooby is tinted green through his RpGeometry flag 0x40
++// (MODULATEMATERIALCOLOR, geometry = [[instance+0x10]+0x18] +8) and material colours (+4), restored when it's turned off.
++//
++// Monsters: base type 0x02 (NPC) entities in the scene list. Off = update function (+0x30) cleared, which the scene loop
++// skips, and the entity parked off-map like mkhip.py does. Names come from the scene HIP's ADBG records on the disc.
++//
++// Everything runs on the game thread (settings_overlay::Draw is called from the GXCopyDisp HLE).
++#include "no100f_devmenu.h"
++
++#include <imgui.h>
++
++#include <algorithm>
++#include <cctype>
++#include <cmath>
++#include <cstdint>
++#include <cstdio>
++#include <filesystem>
++#include <fstream>
++#include <iterator>
++#include <map>
++#include <sstream>
++#include <string>
++#include <vector>
++
++#include "memory.h"
++#include "recomp_mod_loader.h"
++#include "runtime_config.h"
++
++namespace no100f_devmenu {
++namespace {
++
++constexpr uint32_t kSceneCurPtr = 0x80245CF4u;     // globals (0x80245190) + 0xB64: current scene
++constexpr uint32_t kPlayerFramePtr = 0x802453C8u;    // globals + 0x238: player entity frame (matrix first, pos at +0x30)
++constexpr uint32_t kPlayerModelPtr = 0x802453B4u;  // globals + 0x224: player model instance, [+0x20] = its matrix
++constexpr uint32_t kGameMode = 0x80270E18u;        // r13-0x7468: 0xB in game
++constexpr uint32_t kGameState = 0x802703C8u;       // r13-0x7EB8: 1 = playing, 4 = fade out, 5 = scene switch
++constexpr uint32_t kCameraTarget = 0x801BD0A0u;    // camera follow target: current (+0), previous (+0xC)
++constexpr uint32_t kAreaTable = 0x801D6428u;       // 13 x 16: name, letter << 24, index, 0
++constexpr uint32_t kLevelTable = 0x801D651Cu;      // 36-byte entries: title, index, snacks, snacks, tokens, 4 scene IDs
++constexpr uint32_t kTakeDamage = 0x802459B4u;      // globals + 0x824: sd2.ini TakeDamage
++constexpr uint32_t kGodTint = 0x78FF78FFu;         // material colour RGBA while god mode is on
++constexpr uint8_t kNpcBaseType = 0x02;
++
++constexpr uint32_t kReserveStart = 0x816FF000u;    // below __ArenaHi (0x81700000); lowers the arena by one page
++constexpr uint32_t kFakePortal = kReserveStart;
++constexpr uint32_t kFakePortalAsset = kReserveStart + 0x40u;
++
++const bool kReserved = [] {
++    RecompMod::RegisterMemoryReservation(kReserveStart, kReserveStart + 0x1000u, "NO100F dev menu portal");
++    return true;
++}();
++
++struct Scene {
++    uint32_t id = 0;
++    std::string label;  // "i004  part 1/3"
++};
++struct Level {
++    std::string title;  // "20. Mind Your Manors!  [1st Floor]"
++    std::vector<Scene> scenes;
++};
++struct Spot {
++    uint32_t scene = 0;
++    float x = 0, y = 0, z = 0, yaw = 0;
++    std::string name;
++};
++
++bool g_open = false;
++std::vector<Level> g_levels;
++std::vector<Spot> g_spots;
++bool g_spotsLoaded = false;
++bool g_thisSceneOnly = true;
++char g_newSpotName[64] = "";
++std::string g_status;
++
++// A spot in another scene: teleport after the switch, once the scene has been in play for kSettleFrames.
++constexpr int kSettleFrames = 15;
++constexpr int kPendingTimeoutFrames = 60 * 60;
++bool g_pendingSpot = false;
++Spot g_pending;
++int g_pendingSettle = 0, g_pendingAge = 0;
++
++bool g_god = false;
++uint32_t g_takeDamageSaved = 1;
++std::map<uint32_t, uint32_t> g_tintSaved;  // geometry flags / material colour address -> original word
++
++// Entity: +0x10 asset, +0x2C model instance list (+0 next, +0x20 matrix), +0x30 update, +0x40 frame (pos +0x30,
++// previous pos +0x80), +0x4C bound centre.
++struct Monster {
++    uint32_t base = 0, asset = 0;
++    std::string name;
++    bool off = false;
++    uint32_t update = 0;
++    std::vector<std::pair<uint32_t, uint32_t>> saved;  // position word address, original value
++};
++std::vector<Monster> g_monsters;
++uint32_t g_monSceneId = 0, g_monList = 0, g_monCount = 0;
++bool g_allMonstersOff = false;
++uint32_t g_namesSceneId = 0;
++std::map<uint32_t, std::string> g_npcNames;  // NPC asset ID -> name
++
++float ReadF(uint32_t a) { return Memory::ReadFloat32(a); }
++void WriteF(uint32_t a, float v) { Memory::WriteFloat32(a, v); }
++
++uint32_t Read32Or0(uint32_t a) {
++    uint32_t v = 0;
++    return Memory::TryRead32(a, v) ? v : 0;
++}
++bool IsGuestPtr(uint32_t p) { return p >= 0x80000000u && p < 0x81800000u; }
++
++std::string CStr(uint32_t addr, size_t max = 64) {
++    std::string s;
++    for (size_t i = 0; i < max && IsGuestPtr(addr + static_cast<uint32_t>(i)); ++i) {
++        const uint8_t c = Memory::Read8(addr + static_cast<uint32_t>(i));
++        if (!c) break;
++        s.push_back(c < 0x80 ? static_cast<char>(c) : '?');
++    }
++    return s;
++}
++
++std::string IdString(uint32_t id) {
++    std::string s(4, ' ');
++    for (int i = 0; i < 4; ++i) s[i] = static_cast<char>(id >> (24 - 8 * i));
++    return s;
++}
++uint32_t IdFromString(const std::string& s) {
++    uint32_t id = 0;
++    for (int i = 0; i < 4; ++i) id = (id << 8) | static_cast<uint8_t>(i < static_cast<int>(s.size()) ? std::toupper(s[i]) : ' ');
++    return id;
++}
++std::string Lower(std::string s) {
++    for (char& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
++    return s;
++}
++
++void LoadLevels() {
++    if (!g_levels.empty()) return;
++    std::string areas[128];
++    for (uint32_t a = kAreaTable; a < kAreaTable + 13 * 16; a += 16) {
++        const uint32_t letter = Read32Or0(a + 4) >> 24;
++        if (letter < 128) areas[letter] = CStr(Read32Or0(a));
++    }
++    for (uint32_t a = kLevelTable;; a += 36) {
++        const uint32_t title = Read32Or0(a), index = Read32Or0(a + 4);
++        if (!IsGuestPtr(title) || index != g_levels.size() + 1) break;
++        Level level;
++        std::vector<uint32_t> ids;
++        for (uint32_t k = 0; k < 4; ++k)
++            if (const uint32_t id = Read32Or0(a + 20 + 4 * k)) ids.push_back(id);
++        char head[160];
++        const uint32_t letter = ids.empty() ? 0 : ids[0] >> 24;
++        std::snprintf(head, sizeof head, "%u. %s  [%s]", index, CStr(title).c_str(),
++                      letter < 128 ? areas[letter].c_str() : "?");
++        level.title = head;
++        for (size_t k = 0; k < ids.size(); ++k) {
++            if (ids[k] == IdFromString("R006")) continue;  // listed in the table, not on the disc
++            char label[64];
++            std::snprintf(label, sizeof label, "%s  part %zu/%zu", Lower(IdString(ids[k])).c_str(), k + 1, ids.size());
++            level.scenes.push_back({ids[k], label});
++        }
++        g_levels.push_back(std::move(level));
++    }
++    g_levels.push_back({"Other", {{IdFromString("S006"), "s006  ending"}}});
++}
++
++std::string SceneName(uint32_t id) {
++    LoadLevels();
++    for (const Level& level : g_levels)
++        for (const Scene& scene : level.scenes)
++            if (scene.id == id) return level.title + "  " + scene.label;
++    return Lower(IdString(id));
++}
++
++std::filesystem::path SpotsPath() { return RuntimeConfigFile::ApplicationDataDirectory() / "devmenu_spots.txt"; }
++
++void LoadSpots() {
++    if (g_spotsLoaded) return;
++    g_spotsLoaded = true;
++    std::ifstream in(SpotsPath());
++    for (std::string line; std::getline(in, line);) {
++        std::istringstream ss(line);
++        std::string scene;
++        Spot s;
++        if (!(ss >> scene >> s.x >> s.y >> s.z >> s.yaw)) continue;
++        s.scene = IdFromString(scene);
++        std::getline(ss >> std::ws, s.name);
++        g_spots.push_back(s);
++    }
++}
++
++void SaveSpots() {
++    std::ofstream out(SpotsPath(), std::ios::trunc);
++    for (const Spot& s : g_spots) {
++        char b[160];
++        std::snprintf(b, sizeof b, "%s %.3f %.3f %.3f %.4f ", IdString(s.scene).c_str(), s.x, s.y, s.z, s.yaw);
++        out << b << s.name << "\n";
++    }
++}
++
++uint32_t CurrentScenePtr() {
++    const uint32_t scene = Read32Or0(kSceneCurPtr);
++    return IsGuestPtr(scene) ? scene : 0;
++}
++uint32_t CurrentSceneId() {
++    const uint32_t scene = CurrentScenePtr();
++    return scene ? Read32Or0(scene + 0x6C) : 0;
++}
++bool InPlay() { return Read32Or0(kGameMode) == 0xB && Read32Or0(kGameState) == 1 && CurrentScenePtr(); }
++
++bool ReadPlayer(Spot& s) {
++    const uint32_t mat = Read32Or0(kPlayerFramePtr);
++    if (!IsGuestPtr(mat)) return false;
++    s.x = ReadF(mat + 0x30);
++    s.y = ReadF(mat + 0x34);
++    s.z = ReadF(mat + 0x38);
++    s.yaw = std::atan2(ReadF(mat + 0x20), ReadF(mat + 0x28));
++    s.scene = CurrentSceneId();
++    return true;
++}
++
++void WriteYawMatrix(uint32_t m, float yaw) {
++    const float c = std::cos(yaw), s = std::sin(yaw);
++    const float rows[3][3] = {{c, 0, -s}, {0, 1, 0}, {s, 0, c}};  // right, up, at
++    for (uint32_t r = 0; r < 3; ++r)
++        for (uint32_t k = 0; k < 3; ++k) WriteF(m + r * 0x10 + k * 4, rows[r][k]);
++}
++
++// Player entity frame ([globals+0x238]): +0x00 matrix (pos +0x30), +0x80 previous position, two Y-axis rotations
++// (axis +0x98 / angle +0xA4, axis +0xB8 / angle +0xC4) the matrix is rebuilt from. The model instance matrix
++// ([[globals+0x224]+0x20]) is what the scene setup also moves at spawn.
++bool TeleportInScene(const Spot& s) {
++    const uint32_t frame = Read32Or0(kPlayerFramePtr);
++    const uint32_t holder = Read32Or0(kPlayerModelPtr);
++    const uint32_t model = IsGuestPtr(holder) ? Read32Or0(holder + 0x20) : 0;
++    if (!IsGuestPtr(frame) || !IsGuestPtr(model)) return false;
++    for (const uint32_t m : {frame, model}) {
++        WriteYawMatrix(m, s.yaw);
++        WriteF(m + 0x30, s.x);
++        WriteF(m + 0x34, s.y);
++        WriteF(m + 0x38, s.z);
++    }
++    WriteF(frame + 0x80, s.x);
++    WriteF(frame + 0x84, s.y);
++    WriteF(frame + 0x88, s.z);
++    WriteF(frame + 0xA4, s.yaw);
++    WriteF(frame + 0xC4, s.yaw);
++    for (const uint32_t v : {kCameraTarget, kCameraTarget + 0xCu}) {
++        WriteF(v, s.x);
++        WriteF(v + 4, s.y);
++        WriteF(v + 8, s.z);
++    }
++    return true;
++}
++
++bool SwitchScene(uint32_t id, float yawRadians) {
++    const uint32_t scene = CurrentScenePtr();
++    if (!scene || !InPlay() || Read32Or0(scene + 0x70)) return false;
++    for (uint32_t a = kFakePortal; a < kFakePortalAsset + 0x40u; a += 4) Memory::Write32(a, 0);
++    Memory::Write32(kFakePortal + 0x10, kFakePortalAsset);
++    Memory::Write32(kFakePortalAsset + 0x08, 0);  // camera: none -> the scene's default
++    Memory::Write32(kFakePortalAsset + 0x0C, 0);  // spawn marker: none -> the player asset's position
++    WriteF(kFakePortalAsset + 0x10, yawRadians * 180.0f / 3.14159265f);
++    Memory::Write32(kFakePortalAsset + 0x14, id);
++    Memory::Write32(scene + 0x70, kFakePortal);
++    return true;
++}
++
++void GoToSpot(const Spot& s) {
++    if (!InPlay()) {
++        g_status = "Not in play (wait for the level to finish loading, close the pause menu).";
++        return;
++    }
++    if (s.scene == CurrentSceneId()) {
++        g_status = TeleportInScene(s) ? "Teleported to " + s.name : "Player not found.";
++        return;
++    }
++    if (!SwitchScene(s.scene, s.yaw)) {
++        g_status = "Scene switch refused (a portal is already pending?).";
++        return;
++    }
++    g_pending = s;
++    g_pendingSpot = true;
++    g_pendingSettle = g_pendingAge = 0;
++    g_status = "Loading " + Lower(IdString(s.scene)) + ", then teleporting to " + s.name;
++}
++
++void GoToScene(uint32_t id) {
++    g_pendingSpot = false;
++    if (id == CurrentSceneId()) {
++        g_status = "Already in " + Lower(IdString(id)) + ".";
++        return;
++    }
++    g_status = SwitchScene(id, 0.0f) ? "Loading " + Lower(IdString(id)) + "..."
++                                     : "Not in play (wait for the level to load, close the pause menu).";
++}
++
++void UpdatePending() {
++    if (!g_pendingSpot) return;
++    if (++g_pendingAge > kPendingTimeoutFrames) {
++        g_pendingSpot = false;
++        g_status = "Gave up waiting for " + Lower(IdString(g_pending.scene)) + ".";
++        return;
++    }
++    if (!InPlay() || CurrentSceneId() != g_pending.scene) {
++        g_pendingSettle = 0;
++        return;
++    }
++    if (++g_pendingSettle < kSettleFrames) return;
++    g_pendingSpot = false;
++    g_status = TeleportInScene(g_pending) ? "Teleported to " + g_pending.name : "Player not found.";
++}
++
++// Scooby's geometry flag and material colour words.
++std::vector<std::pair<uint32_t, bool>> PlayerTintWords() {  // address, is the geometry flags word
++    std::vector<std::pair<uint32_t, bool>> words;
++    for (uint32_t inst = Read32Or0(kPlayerModelPtr), n = 0; IsGuestPtr(inst) && n < 32; inst = Read32Or0(inst), ++n) {
++        const uint32_t atomic = Read32Or0(inst + 0x10);
++        const uint32_t geom = IsGuestPtr(atomic) ? Read32Or0(atomic + 0x18) : 0;
++        if (!IsGuestPtr(geom)) continue;
++        words.push_back({geom + 8, true});
++        const uint32_t mats = Read32Or0(geom + 0x20), count = Read32Or0(geom + 0x24);
++        for (uint32_t m = 0; IsGuestPtr(mats) && m < count && m < 64; ++m)
++            if (const uint32_t mat = Read32Or0(mats + m * 4); IsGuestPtr(mat)) words.push_back({mat + 4, false});
++    }
++    return words;
++}
++
++void ApplyTint() {
++    for (const auto& [addr, isFlags] : PlayerTintWords()) {
++        const uint32_t v = Read32Or0(addr), want = isFlags ? v | 0x40u : kGodTint;
++        if (v == want) continue;
++        g_tintSaved.emplace(addr, v);
++        Memory::Write32(addr, want);
++    }
++}
++
++// Only words that still belong to Scooby's model: a scene load may have freed the ones tinted before.
++void RestoreTint() {
++    for (const auto& [addr, isFlags] : PlayerTintWords())
++        if (const auto it = g_tintSaved.find(addr); it != g_tintSaved.end()) Memory::Write32(addr, it->second);
++    g_tintSaved.clear();
++}
++
++void SetGod(bool on) {
++    if (on == g_god) return;
++    g_god = on;
++    if (on) {
++        g_takeDamageSaved = Read32Or0(kTakeDamage);
++        Memory::Write32(kTakeDamage, 0);
++        if (InPlay()) ApplyTint();
++    } else {
++        Memory::Write32(kTakeDamage, g_takeDamageSaved);
++        if (InPlay()) RestoreTint();
++        g_tintSaved.clear();
++    }
++}
++
++// Every frame: sd2.ini may be read again on a load, and a new scene can bring a new player model.
++void UpdateGod() {
++    if (!g_god) return;
++    if (Read32Or0(kTakeDamage)) Memory::Write32(kTakeDamage, 0);
++    if (InPlay()) ApplyTint();
++}
++
++uint32_t BE32(const std::vector<uint8_t>& d, size_t o) {
++    return o + 4 <= d.size() ? (uint32_t{d[o]} << 24) | (uint32_t{d[o + 1]} << 16) | (uint32_t{d[o + 2]} << 8) | d[o + 3] : 0;
++}
++
++// HIP: HIPA (no size), PACK, DICT > ATOC > AHDR (id, type, offset, size, plus, flags, ADBG: size +4, name +12).
++void WalkHip(const std::vector<uint8_t>& d, size_t off, size_t end, int depth) {
++    while (off + 8 <= end && depth < 4) {
++        const uint32_t tag = BE32(d, off), size = BE32(d, off + 4);
++        const size_t body = off + 8;
++        if (tag == IdFromString("HIPA")) {
++            off = body;
++            continue;
++        }
++        if (tag == IdFromString("DICT") || tag == IdFromString("ATOC")) {
++            WalkHip(d, body, std::min(end, body + size), depth + 1);
++        } else if (tag == IdFromString("AHDR") && BE32(d, body + 4) == IdFromString("NPC ") &&
++                   BE32(d, body + 24) == IdFromString("ADBG")) {
++            const size_t nameEnd = std::min(end, body + 32 + BE32(d, body + 28));
++            std::string name;
++            for (size_t i = body + 36; i < nameEnd && d[i]; ++i) name.push_back(static_cast<char>(d[i]));
++            while (!name.empty() && name.back() == ' ') name.pop_back();
++            g_npcNames[BE32(d, body)] = name;
++        }
++        off = body + size;
++    }
++}
++
++void LoadNpcNames(uint32_t sceneId) {
++    if (sceneId == g_namesSceneId) return;
++    g_namesSceneId = sceneId;
++    g_npcNames.clear();
++    const std::filesystem::path root = RuntimeConfigFile::ResolvedDvdRoot();
++    if (root.empty()) return;
++    const std::string id = Lower(IdString(sceneId));
++    std::ifstream in(root / "files" / (std::string(1, static_cast<char>(std::toupper(id[0]))) + "0") / (id + ".HIP"),
++                     std::ios::binary);
++    const std::vector<uint8_t> data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
++    WalkHip(data, 0, data.size(), 0);
++}
++
++// A new scene (or the same one rebuilt) starts with every monster on.
++void RefreshMonsters() {
++    const uint32_t scene = CurrentScenePtr(), id = CurrentSceneId();
++    const uint32_t list = Read32Or0(scene + 0x78), count = Read32Or0(scene + 0x74);
++    if (id == g_monSceneId && list == g_monList && count == g_monCount) return;
++    g_monSceneId = id;
++    g_monList = list;
++    g_monCount = count;
++    g_monsters.clear();
++    LoadNpcNames(id);
++    for (uint32_t i = 0; IsGuestPtr(list) && i < count && i < 8000; ++i) {
++        const uint32_t base = Read32Or0(list + i * 4);
++        if (!IsGuestPtr(base) || Memory::Read8(base + 4) != kNpcBaseType) continue;
++        Monster m;
++        m.base = base;
++        const uint32_t asset = Read32Or0(base + 0x10);
++        m.asset = IsGuestPtr(asset) ? Read32Or0(asset) : Read32Or0(base);
++        const auto it = g_npcNames.find(m.asset);
++        char hex[16];
++        std::snprintf(hex, sizeof hex, "%08X", m.asset);
++        m.name = it != g_npcNames.end() && !it->second.empty() ? it->second : hex;
++        g_monsters.push_back(std::move(m));
++    }
++}
++
++// Every position the entity has: frame, previous frame position, model instance matrices, bound centre.
++std::vector<uint32_t> MonsterPosAddrs(uint32_t base) {
++    std::vector<uint32_t> addrs;
++    if (const uint32_t frame = Read32Or0(base + 0x40); IsGuestPtr(frame)) {
++        addrs.push_back(frame + 0x30);
++        addrs.push_back(frame + 0x80);
++    }
++    for (uint32_t inst = Read32Or0(base + 0x2C), n = 0; IsGuestPtr(inst) && n < 32; inst = Read32Or0(inst), ++n)
++        if (const uint32_t mat = Read32Or0(inst + 0x20); IsGuestPtr(mat)) addrs.push_back(mat + 0x30);
++    addrs.push_back(base + 0x4C);
++    return addrs;
++}
++
++// Off: no update, parked at (2000 + 50i, -500, 2000). Repeated every frame in case the game sets them again.
++void ParkMonster(Monster& m, size_t index) {
++    if (const uint32_t update = Read32Or0(m.base + 0x30)) {
++        m.update = update;
++        Memory::Write32(m.base + 0x30, 0);
++    }
++    const float park[3] = {2000.0f + 50.0f * static_cast<float>(index), -500.0f, 2000.0f};
++    for (const uint32_t a : MonsterPosAddrs(m.base)) {
++        for (uint32_t k = 0; k < 3; ++k) {
++            const uint32_t w = a + 4 * k;
++            if (std::none_of(m.saved.begin(), m.saved.end(), [w](const auto& s) { return s.first == w; }))
++                m.saved.push_back({w, Read32Or0(w)});
++            WriteF(w, park[k]);
++        }
++    }
++    m.off = true;
++}
++
++void RestoreMonster(Monster& m) {
++    if (!m.off) return;
++    if (m.update && !Read32Or0(m.base + 0x30)) Memory::Write32(m.base + 0x30, m.update);
++    for (const auto& [addr, value] : m.saved) Memory::Write32(addr, value);
++    m.saved.clear();
++    m.off = false;
++}
++
++void SetAllMonstersOff(bool off) {
++    g_allMonstersOff = off;
++    if (!off)
++        for (Monster& m : g_monsters) RestoreMonster(m);
++}
++
++void UpdateMonsters() {
++    if (!InPlay()) return;
++    RefreshMonsters();
++    for (size_t i = 0; i < g_monsters.size(); ++i)
++        if (g_allMonstersOff || g_monsters[i].off) ParkMonster(g_monsters[i], i);
++}
++
++Monster* FindMonster(const std::string& key) {
++    for (size_t i = 0; i < g_monsters.size(); ++i)
++        if (std::to_string(i) == key || Lower(g_monsters[i].name) == Lower(key)) return &g_monsters[i];
++    return nullptr;
++}
++
++std::string MonsterList() {
++    std::string out = std::to_string(g_monsters.size()) + " monsters" + (g_allMonstersOff ? " (all off)" : "");
++    for (size_t i = 0; i < g_monsters.size(); ++i) {
++        const Monster& m = g_monsters[i];
++        const uint32_t frame = Read32Or0(m.base + 0x40);
++        char b[200];
++        std::snprintf(b, sizeof b, "\n  %zu %-10s %08X base %08X %s update %08X pos %.2f %.2f %.2f bound %.2f %.2f %.2f", i,
++                      m.name.c_str(), m.asset, m.base, m.off ? "OFF" : "on ", Read32Or0(m.base + 0x30),
++                      IsGuestPtr(frame) ? ReadF(frame + 0x30) : 0.f, IsGuestPtr(frame) ? ReadF(frame + 0x34) : 0.f,
++                      IsGuestPtr(frame) ? ReadF(frame + 0x38) : 0.f, ReadF(m.base + 0x4C), ReadF(m.base + 0x50),
++                      ReadF(m.base + 0x54));
++        out += b;
++    }
++    return out;
++}
++
++// devmenu.txt (cwd = Play), read every 30 frames while in play and then deleted; results go to devmenu.log.
++//   scene ID            go to scene ID (start position)
++//   spot NAME           go to a saved spot
++//   save NAME           save the current spot
++//   tp X Y Z [YAWDEG]   teleport in this scene
++//   where               log the scene and Scooby's position
++//   peek ADDR [N]       log N (default 64) words from ADDR
++//   frame               peek the player frame
++//   god on|off          god mode
++//   monsters [on|off]   list this scene's monsters; all monsters off (every scene) / back on
++//   monster N|NAME on|off
++//   ents                log the scene's entity list
++void PollCommandFile() {
++    static uint32_t tick = 0;
++    if (++tick % 30 != 0 || !InPlay() || g_pendingSpot) return;
++    std::ifstream in("devmenu.txt");
++    if (!in) return;
++    std::vector<std::string> lines;
++    for (std::string l; std::getline(in, l);) lines.push_back(l);
++    in.close();
++    std::remove("devmenu.txt");
++    std::ofstream log("devmenu.log", std::ios::app);
++    for (const std::string& l : lines) {
++        std::istringstream ss(l);
++        std::string cmd, arg;
++        ss >> cmd;
++        std::getline(ss >> std::ws, arg);
++        g_status.clear();
++        if (cmd == "scene") {
++            GoToScene(IdFromString(arg));
++        } else if (cmd == "spot") {
++            LoadSpots();
++            g_status = "No spot named " + arg;
++            for (const Spot& s : g_spots)
++                if (s.name == arg) GoToSpot(s);
++        } else if (cmd == "save") {
++            LoadSpots();
++            Spot s;
++            if (ReadPlayer(s) && s.scene) {
++                s.name = arg;
++                g_spots.push_back(s);
++                SaveSpots();
++                g_status = "Saved " + arg;
++            }
++        } else if (cmd == "where") {
++            Spot s;
++            char b[128];
++            if (ReadPlayer(s))
++                std::snprintf(b, sizeof b, "%s %.3f %.3f %.3f yaw %.1f", Lower(IdString(s.scene)).c_str(), s.x, s.y, s.z,
++                              s.yaw * 180.0f / 3.14159265f);
++            g_status = ReadPlayer(s) ? b : "Player not found.";
++        } else if (cmd == "peek" || cmd == "frame") {
++            uint32_t addr = 0, n = 64;
++            if (cmd == "frame") {
++                addr = Read32Or0(kPlayerFramePtr);
++            } else {
++                std::sscanf(arg.c_str(), "%x %u", &addr, &n);
++            }
++            char b[64];
++            std::snprintf(b, sizeof b, "%08X:", addr);
++            g_status = b;
++            for (uint32_t i = 0; IsGuestPtr(addr) && i < n; ++i) {
++                const uint32_t w = Read32Or0(addr + i * 4);
++                std::snprintf(b, sizeof b, "%s+%02X %08X %g", i % 4 ? "  " : "\n  ", i * 4, w, ReadF(addr + i * 4));
++                g_status += b;
++            }
++        } else if (cmd == "god") {
++            SetGod(arg == "on");
++            char b[64];
++            std::snprintf(b, sizeof b, "god %s, TakeDamage %u, %zu words tinted", g_god ? "on" : "off",
++                          Read32Or0(kTakeDamage), g_tintSaved.size());
++            g_status = b;
++        } else if (cmd == "monsters") {
++            if (arg == "on" || arg == "off") SetAllMonstersOff(arg == "off");
++            UpdateMonsters();
++            g_status = MonsterList();
++        } else if (cmd == "monster") {
++            const size_t sp = arg.find_last_of(' ');
++            Monster* m = sp == std::string::npos ? nullptr : FindMonster(arg.substr(0, sp));
++            if (!m) {
++                g_status = "No monster " + arg;
++            } else {
++                if (arg.substr(sp + 1) == "off") {
++                    m->off = true;
++                } else {
++                    RestoreMonster(*m);
++                }
++                UpdateMonsters();
++                g_status = MonsterList();
++            }
++        } else if (cmd == "ents") {
++            const uint32_t scene = CurrentScenePtr();
++            const uint32_t list = scene ? Read32Or0(scene + 0x78) : 0, count = scene ? Read32Or0(scene + 0x74) : 0;
++            char b[160];
++            std::snprintf(b, sizeof b, "%u bases at %08X; typed +1A8 %08X x%u, +1AC %08X x%u", count, list,
++                          Read32Or0(scene + 0x1A8), Read32Or0(scene + 0xFC), Read32Or0(scene + 0x1AC), Read32Or0(scene + 0x100));
++            g_status = b;
++            for (uint32_t i = 0; IsGuestPtr(list) && i < count && i < 4000; ++i) {
++                const uint32_t base = Read32Or0(list + i * 4);
++                const uint32_t asset = Read32Or0(base + 0x10), frame = Read32Or0(base + 0x40);
++                std::snprintf(b, sizeof b, "\n  %4u %08X id %08X type %02X flags %04X asset %08X frame %08X pos %.2f %.2f %.2f", i, base,
++                              Read32Or0(base), Read32Or0(base + 4) >> 24, (Read32Or0(base + 4) >> 0) & 0xFFFF, asset, frame,
++                              IsGuestPtr(frame) ? ReadF(frame + 0x30) : 0.f, IsGuestPtr(frame) ? ReadF(frame + 0x34) : 0.f,
++                              IsGuestPtr(frame) ? ReadF(frame + 0x38) : 0.f);
++                g_status += b;
++            }
++        } else if (cmd == "tp") {
++            Spot s;
++            float yawDeg = 0;
++            std::istringstream as(arg);
++            if (ReadPlayer(s) && (as >> s.x >> s.y >> s.z)) {
++                if (as >> yawDeg) s.yaw = yawDeg * 3.14159265f / 180.0f;
++                s.name = "tp";
++                GoToSpot(s);
++            }
++        }
++        log << l << " -> " << g_status << "\n";
++    }
++}
++
++void DrawStatus() {
++    const uint32_t id = CurrentSceneId();
++    ImGui::Text("Scene: %s", id ? SceneName(id).c_str() : "-");
++    Spot here;
++    if (ReadPlayer(here))
++        ImGui::Text("Scooby: %.2f %.2f %.2f  yaw %.1f deg", here.x, here.y, here.z, here.yaw * 180.0f / 3.14159265f);
++    ImGui::Text("Game mode %X state %u%s", Read32Or0(kGameMode), Read32Or0(kGameState), InPlay() ? " (in play)" : "");
++    bool god = g_god;
++    if (ImGui::Checkbox("God mode (no damage, green Scooby)", &god)) SetGod(god);
++    if (!g_status.empty()) ImGui::TextWrapped("%s", g_status.c_str());
++}
++
++void DrawSpots() {
++    LoadSpots();
++    ImGui::SetNextItemWidth(220.0f);
++    ImGui::InputTextWithHint("##spotname", "spot name", g_newSpotName, sizeof g_newSpotName);
++    ImGui::SameLine();
++    if (ImGui::Button("Save current spot")) {
++        Spot s;
++        if (ReadPlayer(s) && s.scene) {
++            s.name = g_newSpotName[0] ? g_newSpotName : Lower(IdString(s.scene)) + " spot " + std::to_string(g_spots.size() + 1);
++            g_spots.push_back(s);
++            SaveSpots();
++            g_newSpotName[0] = 0;
++            g_status = "Saved " + s.name;
++        } else {
++            g_status = "Player not found.";
++        }
++    }
++    ImGui::Checkbox("This scene only", &g_thisSceneOnly);
++    const uint32_t cur = CurrentSceneId();
++    int erase = -1;
++    if (ImGui::BeginTable("spots", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
++        for (int i = 0; i < static_cast<int>(g_spots.size()); ++i) {
++            const Spot& s = g_spots[i];
++            if (g_thisSceneOnly && s.scene != cur) continue;
++            ImGui::PushID(i);
++            ImGui::TableNextRow();
++            ImGui::TableNextColumn();
++            if (ImGui::SmallButton("Go")) GoToSpot(s);
++            ImGui::TableNextColumn();
++            ImGui::TextUnformatted(Lower(IdString(s.scene)).c_str());
++            ImGui::TableNextColumn();
++            ImGui::TextUnformatted(s.name.c_str());
++            ImGui::TableNextColumn();
++            if (ImGui::SmallButton("Delete")) erase = i;
++            ImGui::PopID();
++        }
++        ImGui::EndTable();
++    }
++    if (erase >= 0) {
++        g_spots.erase(g_spots.begin() + erase);
++        SaveSpots();
++    }
++}
++
++void DrawScenes() {
++    LoadLevels();
++    ImGui::TextDisabled("Spawns at the scene's start position.");
++    const uint32_t cur = CurrentSceneId();
++    for (const Level& level : g_levels) {
++        if (!ImGui::TreeNode(level.title.c_str())) continue;
++        for (const Scene& scene : level.scenes) {
++            ImGui::PushID(static_cast<int>(scene.id));
++            if (ImGui::Selectable(scene.label.c_str(), scene.id == cur)) GoToScene(scene.id);
++            ImGui::PopID();
++        }
++        ImGui::TreePop();
++    }
++}
++
++void DrawMonsters() {
++    bool allOff = g_allMonstersOff;
++    if (ImGui::Checkbox("All monsters off (every scene)", &allOff)) SetAllMonstersOff(allOff);
++    ImGui::TextDisabled("Off = frozen and parked off-map. Per-monster switches reset on a scene change.");
++    if (!InPlay()) {
++        ImGui::TextDisabled("Not in play.");
++        return;
++    }
++    if (g_monsters.empty()) ImGui::TextDisabled("No monsters in this scene.");
++    ImGui::BeginDisabled(g_allMonstersOff);
++    if (ImGui::BeginTable("monsters", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
++        for (size_t i = 0; i < g_monsters.size(); ++i) {
++            Monster& m = g_monsters[i];
++            ImGui::PushID(static_cast<int>(i));
++            ImGui::TableNextRow();
++            ImGui::TableNextColumn();
++            bool on = !m.off;
++            if (ImGui::Checkbox(m.name.c_str(), &on)) {
++                if (on) {
++                    RestoreMonster(m);
++                } else {
++                    ParkMonster(m, i);
++                }
++            }
++            ImGui::TableNextColumn();
++            ImGui::TextDisabled("%08X", m.asset);
++            ImGui::PopID();
++        }
++        ImGui::EndTable();
++    }
++    ImGui::EndDisabled();
++}
++
++} // namespace
++
++void HandleSdlEvent(const SDL_Event& event) noexcept {
++    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == SDL_SCANCODE_F8) g_open = !g_open;
++}
++
++bool IsOpen() noexcept { return g_open; }
++
++void Draw() noexcept {
++    (void)kReserved;
++    UpdatePending();
++    UpdateGod();
++    UpdateMonsters();
++    PollCommandFile();
++    if (!g_open) return;
++    ImGui::SetNextWindowSize(ImVec2(460.0f, 560.0f), ImGuiCond_FirstUseEver);
++    ImGui::SetNextWindowPos(ImVec2(40.0f, 60.0f), ImGuiCond_FirstUseEver);
++    if (ImGui::Begin("Dev menu (F8)", &g_open)) {
++        DrawStatus();
++        ImGui::Separator();
++        if (ImGui::BeginTabBar("devtabs")) {
++            if (ImGui::BeginTabItem("Spots")) {
++                DrawSpots();
++                ImGui::EndTabItem();
++            }
++            if (ImGui::BeginTabItem("Scenes")) {
++                DrawScenes();
++                ImGui::EndTabItem();
++            }
++            if (ImGui::BeginTabItem("Monsters")) {
++                DrawMonsters();
++                ImGui::EndTabItem();
++            }
++            ImGui::EndTabBar();
++        }
++    }
++    ImGui::End();
++}
++
++} // namespace no100f_devmenu
+diff --git a/wiicompiled/runtime/src/settings_overlay.cpp b/wiicompiled/runtime/src/settings_overlay.cpp
+index 67c4729..ab960ef 100644
+--- a/wiicompiled/runtime/src/settings_overlay.cpp
++++ b/wiicompiled/runtime/src/settings_overlay.cpp
+@@ -7,6 +7,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
+ #include "netplay_lobby.h"
+ #include "netplay_ui.h"
+ #include "settings_overlay.h"
++#include "no100f_devmenu.h"
+ #include "audio_backend.h"
+ #include "aurora_events.h"
+ #include "controller_button_names.h"
+@@ -1743,8 +1744,8 @@ bool IsMouseActivity(const SDL_Event& event) {
+ // Runs on the thread that pumps SDL events (the same one that calls Draw), so
+ // the SDL cursor calls are safe here.
+ void UpdateCursorAutoHide() {
+-    const bool shouldHide =
+-        !g_topBarVisible && Clock::now() - g_lastMouseActivity >= kCursorAutoHideDelay;
++    const bool shouldHide = !g_topBarVisible && !no100f_devmenu::IsOpen() &&
++                            Clock::now() - g_lastMouseActivity >= kCursorAutoHideDelay;
+     if (shouldHide == g_cursorHidden) {
+         return;
+     }
+@@ -1773,7 +1774,7 @@ void PersistDisplayModeIfChanged() {
+ 
+ void ApplyInputBlockState() {
+     const bool blocked = controller_mapping_wizard::IsActive() || g_rebind.active ||
+-                         g_exitPromptOpen || g_topBarVisible || StartupScreenVisible();
++                         g_exitPromptOpen || g_topBarVisible || StartupScreenVisible() || no100f_devmenu::IsOpen();
+     PADBlockInput(blocked);
+     InputBindings::SetInputBlocked(blocked);
+ }
+@@ -1826,6 +1827,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
+             continue;
+         }
+         controller_mapping_wizard::HandleSdlEvent(ev->sdl);
++        if (!g_rebind.active) no100f_devmenu::HandleSdlEvent(ev->sdl);
+         if (g_rebind.active && (IsToggleKey(ev->sdl, SDL_SCANCODE_BACKSPACE) ||
+                                 IsToggleKey(ev->sdl, SDL_SCANCODE_DELETE))) {
+             CompleteRebind(g_rebind.kind == RebindKind::Controller ? PAD_NATIVE_BUTTON_DISABLED
+@@ -1963,6 +1965,7 @@ void Draw() noexcept {
+     NetplayUi::Draw();
+     DrawFpsOverlay();
+     DrawTopBar();
++    no100f_devmenu::Draw();
+     DrawExitPrompt();
+     controller_mapping_wizard::Draw();
+     ApplyInputBlockState();
