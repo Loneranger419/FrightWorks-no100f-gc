@@ -48,6 +48,7 @@ struct RuntimeUserConfig {
     std::optional<bool> skipUnreadyPipelines;
     std::optional<bool> disableCopyFilter;
     std::optional<bool> textureReplacements;
+    std::optional<int> cutoutMode;  // [video] cutout_mode, see CutoutMode()
     std::optional<bool> textureDumps;
     std::optional<bool> showFps;
     std::optional<bool> skipIntro;
@@ -603,6 +604,11 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.hdrPaperWhiteNits = FindConfigFloat(document, "video", "hdr_paper_white_nits");
     config.hdrPeakNits = FindConfigFloat(document, "video", "hdr_peak_nits");
     config.textureReplacements = FindConfigValue<bool>(document, "video", "texture_replacements");
+    if (auto value = FindConfigValue<std::string>(document, "video", "cutout_mode")) {
+        static constexpr std::string_view kModes[] = {"game", "cut", "twopass", "twopass_all"};
+        for (int i = 0; i < 4; ++i)
+            if (*value == kModes[i]) config.cutoutMode = i;
+    }
     config.textureDumps = FindConfigValue<bool>(document, "video", "texture_dumps");
     if (auto value = FindConfigUint(document, "video", "disabled_post_processing_paths");
         value && (*value & ~0x10u) == 0) {
@@ -1165,6 +1171,13 @@ inline bool ShowFps(bool fallback = true) {
 
 inline bool TextureReplacements(bool fallback = true) {
     return Get().textureReplacements.value_or(fallback);
+}
+
+// [video] cutout_mode: how cut-out draws (leaves, grass, webs) are drawn, as aurora_set_cutout_mode takes it:
+// "game" 0 = the game's own alpha test, "cut" 1 = alpha > 127 for HD replacements, "twopass" 2 = solid and faint parts
+// in two passes for HD replacements, "twopass_all" 3 = two passes for original textures too.
+inline int CutoutMode(int fallback = 3) {
+    return Get().cutoutMode.value_or(fallback);
 }
 
 // Dumping only produces the names a replacement would need, so main.cpp

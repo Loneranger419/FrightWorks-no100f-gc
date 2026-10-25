@@ -224,6 +224,10 @@ private:
 };
 } // namespace aurora
 
+namespace aurora::gx {
+struct DrawData;
+} // namespace aurora::gx
+
 namespace aurora::gfx {
 inline constexpr bool UseTextureBuffer = false;
 inline constexpr uint64_t UniformBufferSize = 25165824;  // 24mb
@@ -385,6 +389,10 @@ template <typename DrawData>
 void push_draw_command(DrawData data);
 template <typename DrawData>
 DrawData* get_last_draw_command();
+// Cut-out fringe draws: recorded aside and drawn at the end of the current render pass, or when
+// flush_deferred_draws() runs (before a draw that doesn't write depth, or a clear).
+void push_deferred_draw_command(const gx::DrawData& data);
+void flush_deferred_draws();
 
 template <typename PipelineConfig>
 PipelineRef pipeline_ref(const PipelineConfig& config);

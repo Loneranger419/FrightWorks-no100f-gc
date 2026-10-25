@@ -182,6 +182,12 @@ void aurora_set_pause_on_focus_lost(bool value);
 void aurora_set_background_input(bool value);
 void aurora_set_display_mode(AuroraDisplayMode mode);
 AuroraDisplayMode aurora_get_display_mode();
+// Cut-out draws ("alpha > 0" + depth write: leaves, grass, webs): 0 = the game's own test, 1 = alpha > 127 for HD
+// replacements, 2 = two passes for HD replacements (solid part with depth write, faint part blended without),
+// 3 = two passes for every texture (originals too; the default). Takes effect at the next draw.
+#define AURORA_HAS_CUTOUT_MODE 1
+void aurora_set_cutout_mode(int mode);
+int aurora_get_cutout_mode();
 
 typedef enum {
   AURORA_METALFX_DISABLED,

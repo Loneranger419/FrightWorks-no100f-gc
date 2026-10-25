@@ -778,9 +778,16 @@ struct BindGroupRanges {
   std::array<gfx::Range, MaxIndexAttr> vaRanges{};
 };
 void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXVtxFmt fmt) noexcept;
-// HD texture packs: whether this draw (textures already resolved) needs apply_replacement_alpha_cutoff, and the change.
-bool needs_replacement_alpha_cutoff(const ShaderInfo& info) noexcept;
-void apply_replacement_alpha_cutoff(PipelineConfig& config) noexcept;
+// Cut-out draws ("alpha > low ref" + depth write), see gx.cpp. cutout_state_active: the GX state alone qualifies (before
+// the textures are known); cutout_passes: the passes this draw needs once its textures are resolved.
+enum class CutoutMode : u8 { Game, Cut, TwoPass, TwoPassAll };
+enum class CutoutPasses : u8 { None, Cut, TwoPass };
+void set_cutout_mode(CutoutMode mode) noexcept;
+CutoutMode cutout_mode() noexcept;
+bool cutout_state_active() noexcept;
+CutoutPasses cutout_passes(const ShaderInfo& info) noexcept;
+void apply_cutout_solid(PipelineConfig& config) noexcept;
+void apply_cutout_fringe(PipelineConfig& config) noexcept;
 wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu::VertexBufferLayout> vtxBuffers,
                                     wgpu::ShaderModule shader, const char* label) noexcept;
 wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept;
