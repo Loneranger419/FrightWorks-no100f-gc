@@ -58,13 +58,21 @@ Start-Process 'Play\Scooby-Doo Refrightened.exe' -WorkingDirectory Play   # not 
 Run: `powershell -ExecutionPolicy Bypass -File tools\debug\play-patched.ps1` applies the patch, builds, starts the game
 and takes the patch out of the source when the game closes (`-SkipTranslate` only if the last build was this branch;
 `-CleanBuild` rebuilds `Play\` without it afterwards; `-Keep` to work on the menu, then re-export the patch and `-Remove`).
+`-HdTextures` plays with the HD texture pack like the release does (`texture_pack\ScoobyHD` linked into
+`Play\UserData\texture_replacements`, `texture_replacements = true`; both put back afterwards). The user's config has HD off,
+so a bug seen in the release but not in a dev build may be an HD texture: retry with `-HdTextures`.
 
 **F8** in game: current scene + Scooby's position, go to any scene (start position), save/delete spots and go to them
 (another scene loads first), god mode (no damage, green Scooby), Monsters tab (all off in every scene, or one
 by one in this scene). Spots: `UserData/devmenu_spots.txt` (`I004 x y z yawRad name`). Scriptable through
 `Play/devmenu.txt` (every 30 frames while in play, then deleted; results in `Play/devmenu.log`): `scene ID`, `spot NAME`,
 `save NAME`, `tp X Y Z [YAWDEG]`, `where`, `peek ADDR [N]`, `frame`, `god on|off`, `monsters [on|off]` (list / all),
-`monster N|NAME on|off`, `ents` (scene entity list). Doesn't touch warp flags or the save file.
+`monster N|NAME on|off`, `ents` (scene entity list), `textures`. Doesn't touch warp flags or the save file.
+
+Textures tab (for HD pack audits): reads `UserData/devmenu_textures.txt` (tab-separated `id file severity asset scenes level`,
+`#` comments) and lists those replacement textures per scene, each marked "drawn" once the game has used it since start
+(aurora `aurora_texture_replacement_used(name)`, added by the patch: names are recorded when a replacement is looked up).
+Each row can save a spot named after the ID or go to it; suspects whose scenes include `boot` count in every scene.
 
 - Scene switch = the game's portal path: write a portal + asset (+0x08 camera, +0x0C marker, +0x10 yaw deg, +0x14 scene ID)
   in a reserved page (0x816FF000, lowers the arena by 4 KB) and set the pending portal `[[0x80245CF4]+0x70]`. The scene
@@ -75,11 +83,12 @@ by one in this scene). Spots: `UserData/devmenu_spots.txt` (`I004 x y z yawRad n
 - God mode: sd2.ini `TakeDamage` lives at `0x802459B4` (globals + 0x824) and is read on every hit (`0x8005A430`: health
   +0x2E8 -= damage only when nonzero); held at 0. Tint: player instances `[0x802453B4]` (+0 next, +0x10 RpAtomic), geometry
   `[atomic+0x18]`: flags +8 `|= 0x40` (modulate material colour), materials `[geom+0x20]` x `[geom+0x24]`, colour RGBA at
-  `mat+4` (`0x78FF78FF` = green). Scooby has 12 atomics, one material each, all `FFFFFFFF`.
+  `mat+4` (`0x78FF78FF` = green). Scooby has 12 atomics, one material each, all `FFFFFFFF`. Human-checked: no health
+  lost, but the hit reaction (knockback animation + freeze) still plays; it isn't gated on TakeDamage.
 - Monsters = base type 0x02 (NPC) in the scene list `[scene+0x78]` x `[scene+0x74]` (gang NPCs like SHAGGYRUN too).
   Entity: +0x10 asset (first word = ID), +0x2C model instances (+0x20 matrix), +0x30 update (null = the scene loop skips it),
   +0x40 frame, +0x4C bound centre. Off = update nulled + parked at (2000+50i, -500, 2000) every frame; on = restored. Names:
-  the scene HIP's ADBG records (`files/<L>0/<id>.HIP`, type `NPC `).
+  the scene HIP's ADBG records (`files/<L>0/<id>.HIP`, type `NPC `). Human-checked: parked monsters can't hit or block.
 - The game's own warp gates: table 0x801C68B0 (26 x {index, unlocked, scene}); unlock-all `0x8004C690` (only called by a
   blanked-out cheat). Pause map rooms (`E 05 SELECTED`) only pick the stats shown, they don't warp.
 

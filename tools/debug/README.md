@@ -34,7 +34,7 @@ user's own `Config.toml` there as `Config.user.toml` (session scripts restore it
 
 | Path | What |
 | --- | --- |
-| `play-patched.ps1` | Apply patches (default `devmenu`: F8 dev menu), build, play; patches come out of the source when the game closes. `-Patch a,b`, `-Keep`, `-CleanBuild`, `-Remove` |
+| `play-patched.ps1` | Apply patches (default `devmenu`: F8 dev menu), build, play; patches come out of the source when the game closes. `-Patch a,b`, `-HdTextures` (with the HD pack), `-Keep`, `-CleanBuild`, `-Remove` |
 | `manual-session.ps1` | Single-window playtest: `start -Boot <level> [-AllPowerups]` (writes Config + `zz-manual` boot mod), `shot`, `stop`, `stop-tests` |
 | `dol.py` | `callers` / `func` / `dis` / `name` on `game/main.dol` with MAP names (needs `capstone`) |
 | `overrides.py` | Active native overrides; `--effects`, `--xref` (`__GXData` fields only the replaced original maintained) |

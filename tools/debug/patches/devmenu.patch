@@ -1,3 +1,95 @@
+diff --git a/wiicompiled/aurora-main/include/aurora/aurora.h b/wiicompiled/aurora-main/include/aurora/aurora.h
+index 977cdfe..36b5d83 100644
+--- a/wiicompiled/aurora-main/include/aurora/aurora.h
++++ b/wiicompiled/aurora-main/include/aurora/aurora.h
+@@ -198,6 +198,8 @@ bool aurora_get_metalfx_spatial();
+ bool aurora_is_metalfx_spatial_supported();
+ // Button prompt textures for the controller in use: 0 xbox, 1 playstation, 2 nintendo, -1 the game's own.
+ void aurora_set_button_icon_style(int style);
++// DEBUG (devmenu patch): whether texture_replacements/<name>.png|.dds has been drawn since start.
++bool aurora_texture_replacement_used(const char* name);
+ AuroraMetalFXStatus aurora_get_metalfx_status();
+ 
+ AuroraBackend aurora_get_backend();
+diff --git a/wiicompiled/aurora-main/lib/aurora.cpp b/wiicompiled/aurora-main/lib/aurora.cpp
+index 6d2dc60..e429bb9 100644
+--- a/wiicompiled/aurora-main/lib/aurora.cpp
++++ b/wiicompiled/aurora-main/lib/aurora.cpp
+@@ -2188,6 +2188,13 @@ void aurora_set_button_icon_style(int style) {
+   aurora::gfx::texture_replacement::set_button_icon_style(style);
+ #endif
+ }
++bool aurora_texture_replacement_used(const char* name) {
++#ifdef AURORA_ENABLE_GX
++  return aurora::gfx::texture_replacement::replacement_used(name);
++#else
++  return false;
++#endif
++}
+ bool aurora_get_metalfx_spatial() { return aurora::g_metalfxRequested.load(); }
+ bool aurora_is_metalfx_spatial_supported() { return aurora::g_metalfxSupported.load(); }
+ AuroraMetalFXStatus aurora_get_metalfx_status() { return aurora::g_metalfxStatus.load(); }
+diff --git a/wiicompiled/aurora-main/lib/gfx/texture_replacement.cpp b/wiicompiled/aurora-main/lib/gfx/texture_replacement.cpp
+index b697bc9..1cec9bc 100644
+--- a/wiicompiled/aurora-main/lib/gfx/texture_replacement.cpp
++++ b/wiicompiled/aurora-main/lib/gfx/texture_replacement.cpp
+@@ -20,6 +20,7 @@
+ #include <filesystem>
+ #include <list>
+ #include <memory>
++#include <mutex>
+ #include <optional>
+ #include <string_view>
+ 
+@@ -721,6 +722,27 @@ bool report_missing_key(const RuntimeTextureKey& key, const GXTexObj_& obj) noex
+   return true;
+ }
+ 
++// DEBUG (devmenu patch): names of the replacements the game has drawn since start, for the dev menu's Textures tab.
++// find_replacement runs once per texture upload (the GX texture caches keep the handle), so this stays cheap.
++absl::flat_hash_set<RuntimeTextureKey> s_usedKeys;
++absl::flat_hash_set<std::string> s_usedNames;
++std::mutex s_usedMutex;
++
++void note_used_replacement(const RuntimeTextureKey& key) noexcept {
++  std::lock_guard lock(s_usedMutex);
++  if (!s_usedKeys.insert(key).second) {
++    return;
++  }
++  auto name = format_replacement_filename(key);
++  name.resize(name.size() - 4);  // ".dds"
++  s_usedNames.insert(std::move(name));
++}
++
++bool replacement_used(std::string_view name) noexcept {
++  std::lock_guard lock(s_usedMutex);
++  return s_usedNames.contains(name);
++}
++
+ void initialize() noexcept { build_index(); }
+ 
+ void shutdown() noexcept {
+@@ -818,6 +840,7 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
+     report_missing_key(key, obj);
+     return std::nullopt;
+   }
++  note_used_replacement(key);
+ 
+   if (const auto* cached = find_cached_replacement(key); cached != nullptr) {
+     return *cached;
+diff --git a/wiicompiled/aurora-main/lib/gfx/texture_replacement.hpp b/wiicompiled/aurora-main/lib/gfx/texture_replacement.hpp
+index a60d9b9..76425f9 100644
+--- a/wiicompiled/aurora-main/lib/gfx/texture_replacement.hpp
++++ b/wiicompiled/aurora-main/lib/gfx/texture_replacement.hpp
+@@ -10,6 +10,8 @@ void register_tlut(const GXTlutObj* obj, const void* data, GXTlutFmt format, uin
+ void load_tlut(const GXTlutObj* obj, uint32_t idx) noexcept;
+ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept;
+ std::string build_texture_replacement_name(const GXTexObj_& obj) noexcept;
++// DEBUG (devmenu patch): whether the replacement with this file name (no extension) has been drawn since start.
++bool replacement_used(std::string_view name) noexcept;
+ // Button prompt set for the controller in use (0 xbox, 1 playstation, 2 nintendo, -1 the game's own GameCube icons).
+ // take_button_icon_style_change returns true once after it changed, so cached textures can be re-resolved.
+ void set_button_icon_style(int style) noexcept;
 diff --git a/wiicompiled/runtime/include/no100f_devmenu.h b/wiicompiled/runtime/include/no100f_devmenu.h
 new file mode 100644
 index 0000000..dcd0857
@@ -18,10 +110,10 @@ index 0000000..dcd0857
 +} // namespace no100f_devmenu
 diff --git a/wiicompiled/runtime/src/no100f_devmenu.cpp b/wiicompiled/runtime/src/no100f_devmenu.cpp
 new file mode 100644
-index 0000000..6b26e33
+index 0000000..e440eee
 --- /dev/null
 +++ b/wiicompiled/runtime/src/no100f_devmenu.cpp
-@@ -0,0 +1,780 @@
+@@ -0,0 +1,907 @@
 +// DEBUG dev menu (F8) for Scooby-Doo! Night of 100 Frights: teleport to any scene, save spots and go back to them,
 +// god mode, monsters off.
 +//
@@ -45,6 +137,7 @@ index 0000000..6b26e33
 +// Everything runs on the game thread (settings_overlay::Draw is called from the GXCopyDisp HLE).
 +#include "no100f_devmenu.h"
 +
++#include <aurora/aurora.h>
 +#include <imgui.h>
 +
 +#include <algorithm>
@@ -538,6 +631,33 @@ index 0000000..6b26e33
 +    return out;
 +}
 +
++// Suspect HD textures for the Textures tab, from UserData/devmenu_textures.txt (tab-separated: id, replacement file name
++// without extension, severity, asset, scenes (space-separated), level). "drawn" = the game has drawn that replacement since
++// start (aurora records each replacement on first upload).
++struct Suspect {
++    std::string id, key, severity, asset, level;
++    std::vector<uint32_t> scenes;
++};
++std::vector<Suspect> g_suspects;
++bool g_suspectsLoaded = false;
++bool g_suspectsThisScene = true;
++
++void LoadSuspects() {
++    if (g_suspectsLoaded) return;
++    g_suspectsLoaded = true;
++    std::ifstream in(RuntimeConfigFile::ApplicationDataDirectory() / "devmenu_textures.txt");
++    for (std::string line; std::getline(in, line);) {
++        std::vector<std::string> f;
++        std::istringstream ss(line);
++        for (std::string field; std::getline(ss, field, '\t');) f.push_back(field);
++        if (f.size() < 6 || f[0].empty() || f[0][0] == '#') continue;
++        Suspect s{f[0], f[1], f[2], f[3], f[5], {}};
++        std::istringstream sc(f[4]);
++        for (std::string id; sc >> id;) s.scenes.push_back(IdFromString(id));
++        g_suspects.push_back(std::move(s));
++    }
++}
++
 +// devmenu.txt (cwd = Play), read every 30 frames while in play and then deleted; results go to devmenu.log.
 +//   scene ID            go to scene ID (start position)
 +//   spot NAME           go to a saved spot
@@ -550,6 +670,7 @@ index 0000000..6b26e33
 +//   monsters [on|off]   list this scene's monsters; all monsters off (every scene) / back on
 +//   monster N|NAME on|off
 +//   ents                log the scene's entity list
++//   textures            log which suspect textures (devmenu_textures.txt) have been drawn
 +void PollCommandFile() {
 +    static uint32_t tick = 0;
 +    if (++tick % 30 != 0 || !InPlay() || g_pendingSpot) return;
@@ -628,6 +749,11 @@ index 0000000..6b26e33
 +                UpdateMonsters();
 +                g_status = MonsterList();
 +            }
++        } else if (cmd == "textures") {
++            LoadSuspects();
++            g_status = "drawn suspects:";
++            for (const Suspect& s : g_suspects)
++                if (aurora_texture_replacement_used(s.key.c_str())) g_status += " " + s.id;
 +        } else if (cmd == "ents") {
 +            const uint32_t scene = CurrentScenePtr();
 +            const uint32_t list = scene ? Read32Or0(scene + 0x78) : 0, count = scene ? Read32Or0(scene + 0x74) : 0;
@@ -762,6 +888,95 @@ index 0000000..6b26e33
 +    ImGui::EndDisabled();
 +}
 +
++// Textures tab (Suspect / LoadSuspects above PollCommandFile). "Save spot" saves Scooby's position under the suspect's ID.
++const Spot* FindSpot(const std::string& name) {
++    for (const Spot& s : g_spots)
++        if (s.name == name) return &s;
++    return nullptr;
++}
++
++void SaveSpotAs(const std::string& name) {
++    Spot s;
++    if (!ReadPlayer(s) || !s.scene) {
++        g_status = "Player not found.";
++        return;
++    }
++    s.name = name;
++    g_spots.erase(std::remove_if(g_spots.begin(), g_spots.end(), [&](const Spot& o) { return o.name == name; }), g_spots.end());
++    g_spots.push_back(s);
++    SaveSpots();
++    g_status = "Saved " + name + " in " + Lower(IdString(s.scene));
++}
++
++void DrawTextures() {
++    LoadSuspects();
++    LoadSpots();
++    LoadLevels();
++    if (g_suspects.empty()) {
++        ImGui::TextWrapped("No suspects: put devmenu_textures.txt in UserData (autotest\\texhunt\\report.py writes it).");
++        return;
++    }
++    ImGui::Checkbox("This scene only", &g_suspectsThisScene);
++    ImGui::SameLine();
++    ImGui::TextDisabled("drawn = seen on screen since start");
++    const uint32_t cur = CurrentSceneId();
++    std::string lastLevel;
++    if (!ImGui::BeginTable("suspects", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) return;
++    for (size_t i = 0; i < g_suspects.size(); ++i) {
++        const Suspect& s = g_suspects[i];
++        // boot.HIP textures are loaded for every scene
++        const bool here = std::find(s.scenes.begin(), s.scenes.end(), cur) != s.scenes.end() ||
++                          std::find(s.scenes.begin(), s.scenes.end(), IdFromString("BOOT")) != s.scenes.end();
++        if (g_suspectsThisScene && !here) continue;
++        if (!g_suspectsThisScene && s.level != lastLevel) {
++            lastLevel = s.level;
++            ImGui::TableNextRow();
++            ImGui::TableNextColumn();
++            ImGui::TextUnformatted(s.level.c_str());
++        }
++        ImGui::PushID(static_cast<int>(i));
++        ImGui::TableNextRow();
++        ImGui::TableNextColumn();
++        const ImVec4 col = s.severity == "high" ? ImVec4(1.0f, 0.42f, 0.42f, 1.0f)
++                           : s.severity == "medium" ? ImVec4(1.0f, 0.72f, 0.3f, 1.0f)
++                                                    : ImVec4(0.6f, 0.67f, 0.73f, 1.0f);
++        ImGui::TextColored(col, "%s", s.id.c_str());
++        ImGui::TableNextColumn();
++        ImGui::TextUnformatted(s.asset.c_str());
++        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s", s.key.c_str(), s.level.c_str());
++        ImGui::TableNextColumn();
++        if (aurora_texture_replacement_used(s.key.c_str())) {
++            ImGui::TextColored(ImVec4(0.45f, 0.86f, 0.45f, 1.0f), "drawn");
++        } else {
++            ImGui::TextDisabled("not yet");
++        }
++        ImGui::TableNextColumn();
++        const Spot* spot = FindSpot(s.id);
++        if (here && ImGui::SmallButton(spot && spot->scene == cur ? "Resave spot" : "Save spot")) SaveSpotAs(s.id);
++        if (!here) {
++            // only scenes from the level table (menus aren't scenes you can load into)
++            const auto it = std::find_if(s.scenes.begin(), s.scenes.end(), [](uint32_t id) {
++                for (const Level& level : g_levels)
++                    for (const Scene& scene : level.scenes)
++                        if (scene.id == id) return true;
++                return false;
++            });
++            if (it != s.scenes.end()) {
++                const std::string label = "Go " + Lower(IdString(*it));
++                if (ImGui::SmallButton(label.c_str())) GoToScene(*it);
++            } else {
++                ImGui::TextDisabled("menu");
++            }
++        }
++        ImGui::TableNextColumn();
++        if (spot) {
++            if (ImGui::SmallButton("Go to spot")) GoToSpot(*spot);
++        }
++        ImGui::PopID();
++    }
++    ImGui::EndTable();
++}
++
 +} // namespace
 +
 +void HandleSdlEvent(const SDL_Event& event) noexcept {
@@ -793,6 +1008,10 @@ index 0000000..6b26e33
 +            }
 +            if (ImGui::BeginTabItem("Monsters")) {
 +                DrawMonsters();
++                ImGui::EndTabItem();
++            }
++            if (ImGui::BeginTabItem("Textures")) {
++                DrawTextures();
 +                ImGui::EndTabItem();
 +            }
 +            ImGui::EndTabBar();
