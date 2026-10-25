@@ -2282,7 +2282,9 @@ static const CachedPipelineState& cached_pipeline_state(const PipelineConfig& co
 }
 
 // Resolving a pipeline the long way costs a ~2.7KB zero-init, a full populate_pipeline_config, an XXH3 over the whole config and a memcmp against the hash-indexed slot -- roughly 11KB of memory traffic for a result that is almost always identical to the previous draw's.
-static const CachedPipelineState& resolve_pipeline_state(GXPrimitive prim, GXVtxFmt fmt) {
+// replacementCutoff: the draw samples an HD replacement and needs apply_replacement_alpha_cutoff (gx.cpp); that
+// variant has its own memo so draws switching between the two don't throw each other's away.
+static const CachedPipelineState& resolve_pipeline_state(GXPrimitive prim, GXVtxFmt fmt, bool replacementCutoff = false) {
   struct Memo {
     const CachedPipelineState* state = nullptr;
     u32 generation = 0;
@@ -2290,7 +2292,8 @@ static const CachedPipelineState& resolve_pipeline_state(GXPrimitive prim, GXVtx
     GXPrimitive prim = static_cast<GXPrimitive>(0);
     GXVtxFmt fmt = static_cast<GXVtxFmt>(0);
   };
-  static Memo memo{};
+  static Memo memos[2]{};
+  Memo& memo = memos[replacementCutoff ? 1 : 0];
 
   const u32 sampleCount = gfx::get_sample_count();
   const u32 generation = g_gxState.pipelineStateGeneration;
@@ -2301,6 +2304,9 @@ static const CachedPipelineState& resolve_pipeline_state(GXPrimitive prim, GXVtx
 
   PipelineConfig config{};
   populate_pipeline_config(config, prim, fmt);
+  if (replacementCutoff) {
+    apply_replacement_alpha_cutoff(config);
+  }
   // cached_pipeline_state hands back a reference into a fixed direct-mapped table, so the address stays valid; the entry it points at can only be rewritten by another call to that function, and every such call goes through this miss path and replaces the memo in the same breath.
   const CachedPipelineState& state = cached_pipeline_state(config);
   memo = Memo{
@@ -3301,10 +3307,15 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
     ranges.vaRanges[i - GX_VA_POS] = array.cachedRange;
   }
 
-  const auto& pipelineState = resolve_pipeline_state(prim, fmt);
+  const CachedPipelineState* pipelineStatePtr = &resolve_pipeline_state(prim, fmt);
+  resolve_sampled_textures(pipelineStatePtr->shaderInfo);
+  // Only the resolved textures tell whether an HD replacement is drawn; the cutoff changes the alpha test only, so the
+  // textures this pipeline samples (and the ones just resolved) are the same.
+  if (needs_replacement_alpha_cutoff(pipelineStatePtr->shaderInfo)) {
+    pipelineStatePtr = &resolve_pipeline_state(prim, fmt, true);
+  }
+  const auto& pipelineState = *pipelineStatePtr;
   const auto& info = pipelineState.shaderInfo;
-
-  resolve_sampled_textures(info);
 
   const auto bindGroups = build_bind_groups(info);
 

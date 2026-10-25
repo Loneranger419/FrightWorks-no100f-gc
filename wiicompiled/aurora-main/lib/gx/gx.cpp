@@ -2002,6 +2002,40 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
   config.colorUpdate = g_gxState.colorUpdate;
 }
 
+// HD texture packs: cut-out materials (leaves, grass, webs) are drawn with alpha compare "alpha > 0", blending and
+// depth write. Built for the game's 64px textures; an upscaled replacement has faint alpha around every shape (from the
+// upscale, and from bilinear filtering of a magnified texture) that is near invisible but still passes "alpha > 0" and
+// writes depth, so whatever is drawn behind it later disappears in a halo round the shape. For draws that sample a
+// replacement, raise that test to alpha > 127: faint pixels are discarded, half-opaque and up draw as before. Original
+// textures keep the game's own test.
+constexpr u32 ReplacementAlphaCutoff = 127;
+
+static bool low_alpha_greater_test(const AlphaCompare& ac) noexcept {
+  const auto low = [](GXCompare comp, u32 ref) { return comp == GX_GREATER && ref < ReplacementAlphaCutoff; };
+  const auto ok = [&](GXCompare comp, u32 ref) { return comp == GX_ALWAYS || low(comp, ref); };
+  return ac.op == GX_AOP_AND && ok(ac.comp0, ac.ref0) && ok(ac.comp1, ac.ref1) &&
+         (low(ac.comp0, ac.ref0) || low(ac.comp1, ac.ref1));
+}
+
+bool needs_replacement_alpha_cutoff(const ShaderInfo& info) noexcept {
+  if (!g_gxState.depthCompare || !g_gxState.depthUpdate || !low_alpha_greater_test(g_gxState.alphaCompare)) {
+    return false;
+  }
+  for (u32 i = 0; i < MaxTextures; ++i) {
+    const auto& tex = g_gxState.textures[i];
+    if (info.sampledTextures.test(i) && tex && tex.ref->isReplacement) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void apply_replacement_alpha_cutoff(PipelineConfig& config) noexcept {
+  auto& ac = config.shaderConfig.alphaCompare;
+  if (ac.comp0 == GX_GREATER) ac.ref0 = std::max(ac.ref0, ReplacementAlphaCutoff);
+  if (ac.comp1 == GX_GREATER) ac.ref1 = std::max(ac.ref1, ReplacementAlphaCutoff);
+}
+
 static TextureBindGroupCacheKey make_texture_bind_group_cache_key(const ShaderInfo& info) noexcept {
   TextureBindGroupCacheKey key{
       .sampledTextures = info.sampledTextures.to_ullong(),

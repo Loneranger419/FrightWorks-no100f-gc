@@ -778,6 +778,9 @@ struct BindGroupRanges {
   std::array<gfx::Range, MaxIndexAttr> vaRanges{};
 };
 void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXVtxFmt fmt) noexcept;
+// HD texture packs: whether this draw (textures already resolved) needs apply_replacement_alpha_cutoff, and the change.
+bool needs_replacement_alpha_cutoff(const ShaderInfo& info) noexcept;
+void apply_replacement_alpha_cutoff(PipelineConfig& config) noexcept;
 wgpu::RenderPipeline build_pipeline(const PipelineConfig& config, ArrayRef<wgpu::VertexBufferLayout> vtxBuffers,
                                     wgpu::ShaderModule shader, const char* label) noexcept;
 wgpu::ShaderModule build_shader(const ShaderConfig& config) noexcept;
