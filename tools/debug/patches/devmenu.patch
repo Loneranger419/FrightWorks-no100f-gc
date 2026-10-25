@@ -1,21 +1,28 @@
 diff --git a/wiicompiled/aurora-main/include/aurora/aurora.h b/wiicompiled/aurora-main/include/aurora/aurora.h
-index 977cdfe..36b5d83 100644
+index 977cdfe..721925d 100644
 --- a/wiicompiled/aurora-main/include/aurora/aurora.h
 +++ b/wiicompiled/aurora-main/include/aurora/aurora.h
-@@ -198,6 +198,8 @@ bool aurora_get_metalfx_spatial();
+@@ -198,6 +198,15 @@ bool aurora_get_metalfx_spatial();
  bool aurora_is_metalfx_spatial_supported();
  // Button prompt textures for the controller in use: 0 xbox, 1 playstation, 2 nintendo, -1 the game's own.
  void aurora_set_button_icon_style(int style);
 +// DEBUG (devmenu patch): whether texture_replacements/<name>.png|.dds has been drawn since start.
 +bool aurora_texture_replacement_used(const char* name);
++// DEBUG (devmenu patch): forget what has been drawn (the dev menu tracks drawn per level).
++void aurora_texture_replacement_reset_used();
++// DEBUG (devmenu patch): draw the replacement with this file name (no extension) solid magenta; nullptr or "" = off.
++void aurora_texture_replacement_highlight(const char* name);
++// DEBUG (devmenu patch): log every texture's draw states to devmenu_texlog.csv, rows tagged with this scene; nullptr or
++// "" = off.
++void aurora_texture_log(const char* scene);
  AuroraMetalFXStatus aurora_get_metalfx_status();
  
  AuroraBackend aurora_get_backend();
 diff --git a/wiicompiled/aurora-main/lib/aurora.cpp b/wiicompiled/aurora-main/lib/aurora.cpp
-index 6d2dc60..e429bb9 100644
+index 6d2dc60..e19fae9 100644
 --- a/wiicompiled/aurora-main/lib/aurora.cpp
 +++ b/wiicompiled/aurora-main/lib/aurora.cpp
-@@ -2188,6 +2188,13 @@ void aurora_set_button_icon_style(int style) {
+@@ -2188,6 +2188,28 @@ void aurora_set_button_icon_style(int style) {
    aurora::gfx::texture_replacement::set_button_icon_style(style);
  #endif
  }
@@ -26,11 +33,48 @@ index 6d2dc60..e429bb9 100644
 +  return false;
 +#endif
 +}
++void aurora_texture_replacement_reset_used() {
++#ifdef AURORA_ENABLE_GX
++  aurora::gfx::texture_replacement::reset_used();
++#endif
++}
++void aurora_texture_replacement_highlight(const char* name) {
++#ifdef AURORA_ENABLE_GX
++  aurora::gfx::texture_replacement::set_highlight(name != nullptr ? name : "");
++#endif
++}
++void aurora_texture_log(const char* scene) {
++#ifdef AURORA_ENABLE_GX
++  aurora::gfx::texture_replacement::set_texture_log_scene(scene != nullptr ? scene : "");
++#endif
++}
  bool aurora_get_metalfx_spatial() { return aurora::g_metalfxRequested.load(); }
  bool aurora_is_metalfx_spatial_supported() { return aurora::g_metalfxSupported.load(); }
  AuroraMetalFXStatus aurora_get_metalfx_status() { return aurora::g_metalfxStatus.load(); }
+diff --git a/wiicompiled/aurora-main/lib/gfx/texture.hpp b/wiicompiled/aurora-main/lib/gfx/texture.hpp
+index 4c1d4cc..cd5d7f4 100644
+--- a/wiicompiled/aurora-main/lib/gfx/texture.hpp
++++ b/wiicompiled/aurora-main/lib/gfx/texture.hpp
+@@ -1,6 +1,7 @@
+ #pragma once
+ #include <dolphin/gx.h>
+ 
++#include <string>
+ #include <utility>
+ 
+ #include "common.hpp"
+@@ -46,6 +47,9 @@ struct TextureRef {
+   u32 gxFormat;
+   bool hasArbitraryMips = false;
+   bool isReplacement = false;
++  // DEBUG (devmenu patch): the texture's replacement file name without extension, for the texture log (static
++  // textures only; empty for EFB copies and other runtime textures).
++  std::string debugKey;
+ 
+   TextureRef(wgpu::Texture texture, wgpu::TextureView sampleTextureView, wgpu::TextureView attachmentTextureView,
+              wgpu::Extent3D size, wgpu::TextureFormat format, uint32_t mipCount, u32 gxFormat)
 diff --git a/wiicompiled/aurora-main/lib/gfx/texture_replacement.cpp b/wiicompiled/aurora-main/lib/gfx/texture_replacement.cpp
-index b697bc9..1cec9bc 100644
+index b697bc9..a91d569 100644
 --- a/wiicompiled/aurora-main/lib/gfx/texture_replacement.cpp
 +++ b/wiicompiled/aurora-main/lib/gfx/texture_replacement.cpp
 @@ -20,6 +20,7 @@
@@ -41,7 +85,7 @@ index b697bc9..1cec9bc 100644
  #include <optional>
  #include <string_view>
  
-@@ -721,6 +722,27 @@ bool report_missing_key(const RuntimeTextureKey& key, const GXTexObj_& obj) noex
+@@ -721,6 +722,112 @@ bool report_missing_key(const RuntimeTextureKey& key, const GXTexObj_& obj) noex
    return true;
  }
  
@@ -66,39 +110,337 @@ index b697bc9..1cec9bc 100644
 +  return s_usedNames.contains(name);
 +}
 +
++// DEBUG (devmenu patch): forget what was drawn (new level). Raises the highlight-change flag so the GX caches are
++// dropped and every texture still on screen goes through find_replacement (and gets noted) again.
++std::atomic<bool> s_highlightChanged{false};
++
++void reset_used() noexcept {
++  {
++    std::lock_guard lock(s_usedMutex);
++    s_usedKeys.clear();
++    s_usedNames.clear();
++  }
++  s_highlightChanged.store(true);
++}
++
++// DEBUG (devmenu patch): the dev menu's "Find" draws one replacement solid magenta so it stands out in the scene.
++std::optional<RuntimeTextureKey> s_highlightKey;  // guarded by s_usedMutex
++gfx::TextureHandle s_highlightTexture;
++
++void set_highlight(std::string_view name) noexcept {
++  std::optional<RuntimeTextureKey> key;
++  if (!name.empty()) key = parse_replacement_filename(std::string(name) + ".dds");
++  std::lock_guard lock(s_usedMutex);
++  s_highlightKey = key;
++  s_highlightChanged.store(true);
++}
++
++bool take_highlight_change() noexcept { return s_highlightChanged.exchange(false); }
++
++bool is_highlighted(const RuntimeTextureKey& key) noexcept {
++  std::lock_guard lock(s_usedMutex);
++  return s_highlightKey.has_value() && *s_highlightKey == key;
++}
++
++bool is_highlight_handle(const gfx::TextureHandle& handle) noexcept { return handle && handle == s_highlightTexture; }
++
++// DEBUG (devmenu patch): the texture log's scene tag; the dev menu sets it when the scene or its log switch changes.
++std::mutex s_texLogMutex;
++std::string s_texLogScene;  // guarded by s_texLogMutex
++std::atomic<uint32_t> s_texLogGeneration{0};
++
++void set_texture_log_scene(std::string_view scene) noexcept {
++  std::lock_guard lock(s_texLogMutex);
++  s_texLogScene = scene;
++  s_texLogGeneration.fetch_add(1);
++}
++
++std::string texture_log_scene() noexcept {
++  std::lock_guard lock(s_texLogMutex);
++  return s_texLogScene;
++}
++
++uint32_t texture_log_generation() noexcept { return s_texLogGeneration.load(std::memory_order_relaxed); }
++
++gfx::TextureHandle highlight_texture() noexcept {
++  if (s_highlightTexture) return s_highlightTexture;
++  constexpr wgpu::Extent3D size{.width = 4, .height = 4, .depthOrArrayLayers = 1};
++  const wgpu::TextureDescriptor textureDescriptor{
++      .label = "TextureReplacement highlight",
++      .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst,
++      .dimension = wgpu::TextureDimension::e2D,
++      .size = size,
++      .format = wgpu::TextureFormat::RGBA8Unorm,
++      .mipLevelCount = 1,
++      .sampleCount = 1,
++  };
++  auto texture = g_device.CreateTexture(&textureDescriptor);
++  const wgpu::TextureViewDescriptor textureViewDescriptor{
++      .label = "TextureReplacement highlight view",
++      .format = wgpu::TextureFormat::RGBA8Unorm,
++      .dimension = wgpu::TextureViewDimension::e2D,
++      .mipLevelCount = 1,
++  };
++  auto textureView = texture.CreateView(&textureViewDescriptor);
++  s_highlightTexture = std::make_shared<gfx::TextureRef>(std::move(texture), std::move(textureView), wgpu::TextureView{},
++                                                         size, wgpu::TextureFormat::RGBA8Unorm, 1, gfx::InvalidTextureFormat);
++  s_highlightTexture->isReplacement = true;
++  std::array<uint8_t, 4 * 4 * 4> magenta{};
++  for (size_t i = 0; i < magenta.size(); i += 4) {
++    magenta[i] = 255;
++    magenta[i + 2] = 255;
++    magenta[i + 3] = 255;
++  }
++  gfx::write_texture(*s_highlightTexture, {magenta.data(), magenta.size()});
++  return s_highlightTexture;
++}
++
  void initialize() noexcept { build_index(); }
  
  void shutdown() noexcept {
-@@ -818,6 +840,7 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
+@@ -734,6 +841,7 @@ void shutdown() noexcept {
+   }
+   s_replacementLru.clear();
+   for (auto& icons : s_buttonIconIndex) icons.clear();
++  s_highlightTexture = {};
+   s_replacementCacheBytes = 0;
+   s_replacementRoot.clear();
+   s_dumpRoot.clear();
+@@ -818,6 +926,10 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
      report_missing_key(key, obj);
      return std::nullopt;
    }
 +  note_used_replacement(key);
++  if (is_highlighted(key)) {
++    return highlight_texture();
++  }
  
    if (const auto* cached = find_cached_replacement(key); cached != nullptr) {
      return *cached;
 diff --git a/wiicompiled/aurora-main/lib/gfx/texture_replacement.hpp b/wiicompiled/aurora-main/lib/gfx/texture_replacement.hpp
-index a60d9b9..76425f9 100644
+index a60d9b9..bd07f90 100644
 --- a/wiicompiled/aurora-main/lib/gfx/texture_replacement.hpp
 +++ b/wiicompiled/aurora-main/lib/gfx/texture_replacement.hpp
-@@ -10,6 +10,8 @@ void register_tlut(const GXTlutObj* obj, const void* data, GXTlutFmt format, uin
+@@ -10,6 +10,21 @@ void register_tlut(const GXTlutObj* obj, const void* data, GXTlutFmt format, uin
  void load_tlut(const GXTlutObj* obj, uint32_t idx) noexcept;
  std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept;
  std::string build_texture_replacement_name(const GXTexObj_& obj) noexcept;
 +// DEBUG (devmenu patch): whether the replacement with this file name (no extension) has been drawn since start.
 +bool replacement_used(std::string_view name) noexcept;
++// DEBUG (devmenu patch): forget them (new level); the next take_highlight_change returns true.
++void reset_used() noexcept;
++// DEBUG (devmenu patch): draw that replacement solid magenta ("" = off). take_highlight_change returns true once after
++// it changed: the caller must drop its cached textures so find_replacement runs again.
++void set_highlight(std::string_view name) noexcept;
++bool take_highlight_change() noexcept;
++// DEBUG (devmenu patch): whether this handle is the magenta highlight texture (never creates it).
++bool is_highlight_handle(const TextureHandle& handle) noexcept;
++// DEBUG (devmenu patch): texture log (gx.cpp, devmenu_texlog.csv): the scene its rows are tagged with, "" = off.
++// texture_log_generation changes on every set, so the draw path re-reads the scene only then.
++void set_texture_log_scene(std::string_view scene) noexcept;
++std::string texture_log_scene() noexcept;
++uint32_t texture_log_generation() noexcept;
  // Button prompt set for the controller in use (0 xbox, 1 playstation, 2 nintendo, -1 the game's own GameCube icons).
  // take_button_icon_style_change returns true once after it changed, so cached textures can be re-resolved.
  void set_button_icon_style(int style) noexcept;
+diff --git a/wiicompiled/aurora-main/lib/gx/gx.cpp b/wiicompiled/aurora-main/lib/gx/gx.cpp
+index faba81d..2e2ce05 100644
+--- a/wiicompiled/aurora-main/lib/gx/gx.cpp
++++ b/wiicompiled/aurora-main/lib/gx/gx.cpp
+@@ -28,6 +28,7 @@ extern "C" unsigned g_spmAudit[8];
+ #include <cstring>
+ #include <mutex>
+ #include <optional>
++#include <string>
+ #include <utility>
+ #include <vector>
+ 
+@@ -597,6 +598,16 @@ std::vector<PatchTarget> find_patch_targets(const void* dest) {
+ 
+ namespace {
+ 
++// DEBUG (devmenu patch): name the texture by its replacement key for the texture log (the shared magenta highlight
++// texture is renamed for whichever key Find highlights).
++static void note_debug_key(const gfx::TextureHandle& handle, const GXTexObj_& obj) noexcept {
++  if (!handle || (!handle->debugKey.empty() && !gfx::texture_replacement::is_highlight_handle(handle))) {
++    return;
++  }
++  const auto name = gfx::texture_replacement::build_texture_replacement_name(obj);
++  handle->debugKey = name.substr(0, name.rfind('.'));
++}
++
+ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
+   ZoneScoped;
+   static const bool spmTexNoCache = std::getenv("SPM_TEX_NOCACHE") != nullptr;
+@@ -653,6 +664,7 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
+     handle = gfx::new_static_texture_2d(obj.width(), obj.height(), obj.mip_count(), obj.format(),
+                                         {static_cast<const uint8_t*>(obj.data), dataSize}, false, nameStr);
+   }
++  note_debug_key(handle, obj);
+   if (canCacheUpload) {
+     store_cached_texture(obj, handle);
+     if (canUseSourceCache) {
+@@ -722,6 +734,7 @@ gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj, const GX
+                                    {converted.data.data(), converted.data.size()}, false, "GX Static Palette Texture");
+     handle->hasArbitraryMips = converted.hasArbitraryMips;
+   }
++  note_debug_key(handle, obj);
+   if (!obj.no_cache() && !tlut.no_cache()) {
+     store_cached_texture(obj, handle, tlut.tlutObjId, tlut.tlutDataVersion);
+     if (canUseSourceCache) {
+@@ -1189,6 +1202,119 @@ void invalidate_static_texture_cache() noexcept {
+   g_gxState.stateDirty = true;
+ }
+ 
++// DEBUG (devmenu patch): a revision bump alone lets the source caches re-prove their old handles, so drop them all and
++// every texture goes through find_replacement again (texture highlight on/off).
++static void drop_static_texture_caches() noexcept;
++
++// DEBUG (devmenu patch): while the dev menu's Find highlights a texture, every distinct GX state it is drawn with goes
++// to devmenu_drawstate.txt (working directory = Play): alpha compare, blending, depth test/write.
++static std::vector<std::string> s_drawStatesLogged;
++
++static void log_highlight_draw_state(const ShaderInfo& info) noexcept {
++  for (u32 i = 0; i < MaxTextures; ++i) {
++    if (!info.sampledTextures.test(i) || !gfx::texture_replacement::is_highlight_handle(g_gxState.textures[i].ref)) {
++      continue;
++    }
++    const auto& s = g_gxState;
++    const auto& ac = s.alphaCompare;
++    char line[256];
++    std::snprintf(line, sizeof line,
++                  "texmap %u | alpha compare %d %u op %d %d %u | blend mode %d src %d dst %d | z test %d func %d write %d "
++                  "before-tex %d | color write %d alpha write %d",
++                  i, ac.comp0, ac.ref0, ac.op, ac.comp1, ac.ref1, s.blendMode, s.blendFacSrc, s.blendFacDst,
++                  s.depthCompare, s.depthFunc, s.depthUpdate, s.zCompLocBeforeTex, s.colorUpdate, s.alphaUpdate);
++    if (s_drawStatesLogged.size() >= 32 ||
++        std::find(s_drawStatesLogged.begin(), s_drawStatesLogged.end(), line) != s_drawStatesLogged.end()) {
++      return;
++    }
++    s_drawStatesLogged.emplace_back(line);
++    if (FILE* f = std::fopen("devmenu_drawstate.txt", "a")) {
++      std::fprintf(f, "%s\n", line);
++      std::fclose(f);
++    }
++    return;
++  }
++}
++
++// DEBUG (devmenu patch): texture log. While the dev menu's log is on, the first draw of each texture key with each
++// distinct sampler and GX state in each scene appends a row to devmenu_texlog.csv (working directory = Play).
++// Static textures only (EFB copies have no key). width/height = the game's texture, file_* = what was uploaded
++// (the replacement when replacement = 1).
++static const char* gx_name(u32 v, std::initializer_list<const char*> names) noexcept {
++  return v < names.size() ? names.begin()[v] : "?";
++}
++
++static void log_texture_draw_states(const ShaderInfo& info) noexcept {
++  static uint32_t generation = UINT32_MAX;
++  static std::string scene;
++  static absl::flat_hash_set<std::string> logged;
++  if (const uint32_t g = gfx::texture_replacement::texture_log_generation(); g != generation) {
++    generation = g;
++    scene = gfx::texture_replacement::texture_log_scene();
++  }
++  if (scene.empty()) {
++    return;
++  }
++  const auto& s = g_gxState;
++  const auto& ac = s.alphaCompare;
++  const std::initializer_list<const char*> compare{"never", "less", "equal", "lequal", "greater", "nequal", "gequal", "always"};
++  const std::initializer_list<const char*> factor{"zero", "one", "clr", "invclr", "srcalpha", "invsrcalpha", "dstalpha", "invdstalpha"};
++  const std::initializer_list<const char*> filter{"near", "linear", "near_mip_near", "lin_mip_near", "near_mip_lin", "lin_mip_lin"};
++  const std::initializer_list<const char*> wrap{"clamp", "repeat", "mirror"};
++  for (u32 i = 0; i < MaxTextures; ++i) {
++    const auto& bind = s.textures[i];
++    if (!info.sampledTextures.test(i) || !bind || bind.ref->debugKey.empty()) {
++      continue;
++    }
++    const auto& ref = *bind.ref;
++    const auto& obj = bind.texObj;
++    char row[640];
++    std::snprintf(row, sizeof row,
++                  "%s,%s,%d,%u,%u,%u,%s,%s,%s,%s,%u,%.3f,%.3f,%.3f,%s,%u,%s,%s,%u,%s,%s,%s,%d,%s,%d,%d,%d,%d,%u,%u,%u",
++                  scene.c_str(), ref.debugKey.c_str(), ref.isReplacement ? 1 : 0, i, obj.width(), obj.height(),
++                  gx_name(obj.wrap_s(), wrap), gx_name(obj.wrap_t(), wrap), gx_name(obj.min_filter(), filter),
++                  gx_name(obj.mag_filter(), filter), obj.has_mips() ? obj.mip_count() : 1u, obj.min_lod(), obj.max_lod(),
++                  obj.lod_bias(), gx_name(ac.comp0, compare), static_cast<u32>(ac.ref0),
++                  gx_name(ac.op, {"and", "or", "xor", "xnor"}), gx_name(ac.comp1, compare), static_cast<u32>(ac.ref1),
++                  gx_name(s.blendMode, {"none", "blend", "logic", "subtract"}), gx_name(s.blendFacSrc, factor),
++                  gx_name(s.blendFacDst, factor), s.depthCompare ? 1 : 0, gx_name(s.depthFunc, compare),
++                  s.depthUpdate ? 1 : 0, s.zCompLocBeforeTex ? 1 : 0, s.colorUpdate ? 1 : 0, s.alphaUpdate ? 1 : 0,
++                  ref.size.width, ref.size.height, ref.mipCount);
++    if (!logged.insert(row).second) {
++      continue;
++    }
++    const bool fresh = !std::filesystem::exists("devmenu_texlog.csv");
++    if (FILE* f = std::fopen("devmenu_texlog.csv", "a")) {
++      if (fresh) {
++        std::fputs("scene,key,replacement,texmap,width,height,wrap_s,wrap_t,min_filter,mag_filter,mips,min_lod,max_lod,"
++                   "lod_bias,alpha_comp0,alpha_ref0,alpha_op,alpha_comp1,alpha_ref1,blend_mode,blend_src,blend_dst,"
++                   "z_test,z_func,z_write,z_before_tex,color_write,alpha_write,file_width,file_height,file_mips\n",
++                   f);
++      }
++      std::fprintf(f, "%s\n", row);
++      std::fclose(f);
++    }
++  }
++}
++
++static void drop_static_texture_caches() noexcept {
++  s_textureObjectCaches.clear();
++  s_tlutObjectCaches.clear();
++  s_staticTextureSourceCache.clear();
++  s_staticPaletteTextureSourceCache.clear();
++  s_texObjSourceKeys.clear();
++  s_texObjPaletteSourceKeys.clear();
++  s_texObjSourceKeyMemo.reset();
++  s_texObjPaletteSourceKeyMemo.reset();
++  clear_static_source_front_cache();
++  for (auto& entry : s_textureResolveIdentityCache) {
++    entry.valid = false;
++    entry.binding.reset();
++  }
++  ++s_textureCacheStamps;  // so the bump below isn't skipped
++  invalidate_static_texture_cache();
++}
++
+ void clear_copy_texture_cache() noexcept {
+   g_gxState.copyTextures.clear();
+   g_gxState.copyTextureCache.clear();
+@@ -1370,6 +1496,10 @@ GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noex
+ void resolve_sampled_textures(const ShaderInfo& info) noexcept {
+   ZoneScoped;
+   if (gfx::texture_replacement::take_button_icon_style_change()) invalidate_static_texture_cache();
++  if (gfx::texture_replacement::take_highlight_change()) {
++    drop_static_texture_caches();
++    s_drawStatesLogged.clear();
++  }
+ 
+   for (u32 i = 0; i < MaxTextures; ++i) {
+     if (!info.sampledTextures.test(i)) {
+@@ -1500,6 +1630,8 @@ void resolve_sampled_textures(const ShaderInfo& info) noexcept {
+       s_lastStaticSourceNoCopyRevision[i] = 0;
+     }
+   }
++  log_highlight_draw_state(info);
++  log_texture_draw_states(info);
+ }
+ 
+ static inline wgpu::BlendFactor to_blend_factor(GXBlendFactor fac, bool isDst, bool alphaComponent) {
 diff --git a/wiicompiled/runtime/include/no100f_devmenu.h b/wiicompiled/runtime/include/no100f_devmenu.h
 new file mode 100644
-index 0000000..dcd0857
+index 0000000..c1d7671
 --- /dev/null
 +++ b/wiicompiled/runtime/include/no100f_devmenu.h
-@@ -0,0 +1,12 @@
+@@ -0,0 +1,20 @@
 +#pragma once
 +
++#include <cstdint>
++
 +#include <SDL3/SDL_events.h>
++
++struct CpuContext;
 +
 +// DEBUG dev menu (F8): teleport to any scene, save spots (scene + position + yaw) and teleport back to them.
 +// Local test builds only (tools/debug/patches/devmenu.patch); not part of any PR.
@@ -107,13 +449,17 @@ index 0000000..dcd0857
 +// Called from settings_overlay::Draw (game thread, once per GXCopyDisp, inside the ImGui frame).
 +void Draw() noexcept;
 +bool IsOpen() noexcept;
++// Game input is held: menu open and focused (click the game or press LB to move with it open), or free camera on.
++bool BlocksInput() noexcept;
++// Free camera: called from the RwCameraBeginUpdate override with the camera about to render.
++void ApplyFreecam(uint32_t camera, CpuContext* ctx);
 +} // namespace no100f_devmenu
 diff --git a/wiicompiled/runtime/src/no100f_devmenu.cpp b/wiicompiled/runtime/src/no100f_devmenu.cpp
 new file mode 100644
-index 0000000..e440eee
+index 0000000..b9f888a
 --- /dev/null
 +++ b/wiicompiled/runtime/src/no100f_devmenu.cpp
-@@ -0,0 +1,907 @@
+@@ -0,0 +1,1373 @@
 +// DEBUG dev menu (F8) for Scooby-Doo! Night of 100 Frights: teleport to any scene, save spots and go back to them,
 +// god mode, monsters off.
 +//
@@ -145,17 +491,26 @@ index 0000000..e440eee
 +#include <cmath>
 +#include <cstdint>
 +#include <cstdio>
++#include <cstdlib>
 +#include <filesystem>
 +#include <fstream>
 +#include <iterator>
 +#include <map>
++#include <set>
 +#include <sstream>
 +#include <string>
 +#include <vector>
 +
++#include <SDL3/SDL.h>
++
++#include "abi_bridge.h"
++#include "hle_stubs.h"
 +#include "memory.h"
++#include "ppc_runtime.h"
 +#include "recomp_mod_loader.h"
 +#include "runtime_config.h"
++
++extern "C" void func_8016A300(CpuContext* ctx);  // the game's RwFrameUpdateObjects
 +
 +namespace no100f_devmenu {
 +namespace {
@@ -193,9 +548,13 @@ index 0000000..e440eee
 +    uint32_t scene = 0;
 +    float x = 0, y = 0, z = 0, yaw = 0;
 +    std::string name;
++    bool cam = false;  // saved with the free camera on: its pose comes back with the spot
++    float cx = 0, cy = 0, cz = 0, cyaw = 0, cpitch = 0;
 +};
 +
 +bool g_open = false;
++bool g_focused = false;  // the menu window has focus: game input is held (click the game to move with the menu open)
++bool g_toggleFocus = false;  // LB pressed: focus the menu / give focus back to the game
 +std::vector<Level> g_levels;
 +std::vector<Spot> g_spots;
 +bool g_spotsLoaded = false;
@@ -314,6 +673,13 @@ index 0000000..e440eee
 +        if (!(ss >> scene >> s.x >> s.y >> s.z >> s.yaw)) continue;
 +        s.scene = IdFromString(scene);
 +        std::getline(ss >> std::ws, s.name);
++        // optional free camera pose before the name: cam=x,y,z,yaw,pitch
++        if (s.name.rfind("cam=", 0) == 0 &&
++            std::sscanf(s.name.c_str(), "cam=%f,%f,%f,%f,%f", &s.cx, &s.cy, &s.cz, &s.cyaw, &s.cpitch) == 5) {
++            s.cam = true;
++            const size_t sp = s.name.find(' ');
++            s.name = sp == std::string::npos ? "" : s.name.substr(sp + 1);
++        }
 +        g_spots.push_back(s);
 +    }
 +}
@@ -321,8 +687,10 @@ index 0000000..e440eee
 +void SaveSpots() {
 +    std::ofstream out(SpotsPath(), std::ios::trunc);
 +    for (const Spot& s : g_spots) {
-+        char b[160];
-+        std::snprintf(b, sizeof b, "%s %.3f %.3f %.3f %.4f ", IdString(s.scene).c_str(), s.x, s.y, s.z, s.yaw);
++        char b[224];
++        int n = std::snprintf(b, sizeof b, "%s %.3f %.3f %.3f %.4f ", IdString(s.scene).c_str(), s.x, s.y, s.z, s.yaw);
++        if (s.cam)
++            std::snprintf(b + n, sizeof b - n, "cam=%.3f,%.3f,%.3f,%.4f,%.4f ", s.cx, s.cy, s.cz, s.cyaw, s.cpitch);
 +        out << b << s.name << "\n";
 +    }
 +}
@@ -395,6 +763,123 @@ index 0000000..e440eee
 +    return true;
 +}
 +
++// Free camera: RwCameraBeginUpdate (0x80168C78, override at the end of this file) gets the main camera's frame
++// replaced by this pose; RenderWare then rebuilds the view matrix and the culling frustum from it. The main camera is
++// [globals + 0] (RwCamera: +4 frame, +0x18 beginUpdate); the frame holds the modelling matrix at +0x10 and the world
++// matrix (LTM) at +0x50, rows right / up / at / pos 16 bytes apart, right = up x at. Game input is held while it is on.
++constexpr uint32_t kMainCameraPtr = 0x80245190u;
++struct FreeCam {
++    bool on = false;
++    float x = 0, y = 0, z = 0, yaw = 0, pitch = 0;  // yaw 0 looks along +z, pitch > 0 looks down
++};
++FreeCam g_cam;
++
++void CamRows(const FreeCam& c, float rows[4][3]) {
++    const float cp = std::cos(c.pitch), sp = std::sin(c.pitch), cy = std::cos(c.yaw), sy = std::sin(c.yaw);
++    const float at[3] = {sy * cp, -sp, cy * cp};
++    const float right[3] = {cy, 0.0f, -sy};  // world up x at, normalised (on screen this points left)
++    const float up[3] = {at[1] * right[2] - at[2] * right[1], at[2] * right[0] - at[0] * right[2],
++                         at[0] * right[1] - at[1] * right[0]};  // at x right
++    for (int k = 0; k < 3; ++k) {
++        rows[0][k] = right[k];
++        rows[1][k] = up[k];
++        rows[2][k] = at[k];
++    }
++    rows[3][0] = c.x;
++    rows[3][1] = c.y;
++    rows[3][2] = c.z;
++}
++
++uint32_t MainCameraFrame() {
++    const uint32_t camera = Read32Or0(kMainCameraPtr);
++    const uint32_t frame = IsGuestPtr(camera) ? Read32Or0(camera + 4) : 0;
++    return IsGuestPtr(frame) ? frame : 0;
++}
++
++// Start the free camera where the game camera is.
++bool ReadMainCamera(FreeCam& c) {
++    const uint32_t frame = MainCameraFrame();
++    if (!frame) return false;
++    const float ax = ReadF(frame + 0x70), ay = ReadF(frame + 0x74), az = ReadF(frame + 0x78);
++    c.x = ReadF(frame + 0x80);
++    c.y = ReadF(frame + 0x84);
++    c.z = ReadF(frame + 0x88);
++    c.yaw = std::atan2(ax, az);
++    c.pitch = std::asin(std::clamp(-ay, -1.0f, 1.0f));
++    return true;
++}
++
++void SetFreecam(bool on) {
++    if (on && !g_cam.on && !ReadMainCamera(g_cam)) {
++        g_status = "Camera not found.";
++        return;
++    }
++    g_cam.on = on;
++    g_status = on ? "Free camera on" : "Free camera off";
++}
++
++// Spots saved with the free camera on keep its pose.
++void AddCam(Spot& s) {
++    s.cam = g_cam.on;
++    if (s.cam) {
++        s.cx = g_cam.x;
++        s.cy = g_cam.y;
++        s.cz = g_cam.z;
++        s.cyaw = g_cam.yaw;
++        s.cpitch = g_cam.pitch;
++    }
++}
++
++void ApplySpotCam(const Spot& s) {
++    if (!s.cam) return;
++    g_cam = {true, s.cx, s.cy, s.cz, s.cyaw, s.cpitch};
++}
++
++// Pad: left stick move, right stick look, LT/RT down/up, hold A fast / B slow. Keyboard: WASD, Q/E down/up, arrows
++// look, Shift fast, Ctrl slow. Not while the menu has focus (its own navigation uses them).
++void UpdateFreecam(bool menuFocused) {
++    static SDL_Gamepad* pad = nullptr;
++    if (!g_cam.on) return;
++    if (pad && !SDL_GamepadConnected(pad)) {
++        SDL_CloseGamepad(pad);
++        pad = nullptr;
++    }
++    if (!pad) {
++        int n = 0;
++        if (SDL_JoystickID* ids = SDL_GetGamepads(&n)) {
++            if (n > 0) pad = SDL_OpenGamepad(ids[0]);
++            SDL_free(ids);
++        }
++    }
++    if (menuFocused) return;
++    const float dt = std::clamp(ImGui::GetIO().DeltaTime, 0.0f, 0.1f);
++    auto axis = [&](SDL_GamepadAxis a) {
++        if (!pad) return 0.0f;
++        const float v = SDL_GetGamepadAxis(pad, a) / 32767.0f;
++        return std::fabs(v) < 0.2f ? 0.0f : v;
++    };
++    auto button = [&](SDL_GamepadButton b) { return pad && SDL_GetGamepadButton(pad, b); };
++    const bool* keys = SDL_GetKeyboardState(nullptr);
++    auto key = [&](SDL_Scancode k) { return keys && keys[k] ? 1.0f : 0.0f; };
++    float fwd = -axis(SDL_GAMEPAD_AXIS_LEFTY) + key(SDL_SCANCODE_W) - key(SDL_SCANCODE_S);
++    float side = axis(SDL_GAMEPAD_AXIS_LEFTX) + key(SDL_SCANCODE_D) - key(SDL_SCANCODE_A);
++    float lift = axis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) - axis(SDL_GAMEPAD_AXIS_LEFT_TRIGGER) + key(SDL_SCANCODE_E) -
++                 key(SDL_SCANCODE_Q);
++    // RenderWare's "right" row points to the screen's left (and yaw grows to the left): both are negated below
++    const float turn = axis(SDL_GAMEPAD_AXIS_RIGHTX) + key(SDL_SCANCODE_RIGHT) - key(SDL_SCANCODE_LEFT);
++    const float tilt = axis(SDL_GAMEPAD_AXIS_RIGHTY) + key(SDL_SCANCODE_DOWN) - key(SDL_SCANCODE_UP);
++    float speed = 8.0f;  // units per second (Scooby runs ~6)
++    if (button(SDL_GAMEPAD_BUTTON_SOUTH) || key(SDL_SCANCODE_LSHIFT)) speed *= 4.0f;
++    if (button(SDL_GAMEPAD_BUTTON_EAST) || key(SDL_SCANCODE_LCTRL)) speed *= 0.2f;
++    g_cam.yaw -= turn * 2.0f * dt;
++    g_cam.pitch = std::clamp(g_cam.pitch + tilt * 1.5f * dt, -1.55f, 1.55f);
++    // level moves: forward/back follow only the yaw (pitch doesn't climb or dive), height only from LT/RT
++    const float sy = std::sin(g_cam.yaw), cy = std::cos(g_cam.yaw);
++    g_cam.x += (sy * fwd - cy * side) * speed * dt;
++    g_cam.y += lift * speed * dt;
++    g_cam.z += (cy * fwd + sy * side) * speed * dt;
++}
++
 +void GoToSpot(const Spot& s) {
 +    if (!InPlay()) {
 +        g_status = "Not in play (wait for the level to finish loading, close the pause menu).";
@@ -402,6 +887,7 @@ index 0000000..e440eee
 +    }
 +    if (s.scene == CurrentSceneId()) {
 +        g_status = TeleportInScene(s) ? "Teleported to " + s.name : "Player not found.";
++        ApplySpotCam(s);
 +        return;
 +    }
 +    if (!SwitchScene(s.scene, s.yaw)) {
@@ -438,6 +924,7 @@ index 0000000..e440eee
 +    if (++g_pendingSettle < kSettleFrames) return;
 +    g_pendingSpot = false;
 +    g_status = TeleportInScene(g_pending) ? "Teleported to " + g_pending.name : "Player not found.";
++    ApplySpotCam(g_pending);
 +}
 +
 +// Scooby's geometry flag and material colour words.
@@ -632,19 +1119,88 @@ index 0000000..e440eee
 +}
 +
 +// Suspect HD textures for the Textures tab, from UserData/devmenu_textures.txt (tab-separated: id, replacement file name
-+// without extension, severity, asset, scenes (space-separated), level). "drawn" = the game has drawn that replacement since
-+// start (aurora records each replacement on first upload).
++// without extension, severity, asset, scenes (space-separated), level). "drawn" = the game has drawn that replacement in
++// this level (see UpdateDrawn).
 +struct Suspect {
 +    std::string id, key, severity, asset, level;
 +    std::vector<uint32_t> scenes;
++    bool effect = false;  // 7th column "effect": drawn at runtime (kills, bonks, pickups...): Effects tab
 +};
 +std::vector<Suspect> g_suspects;
 +bool g_suspectsLoaded = false;
 +bool g_suspectsThisScene = true;
++std::string g_findId;  // suspect drawn solid magenta ("Find"), empty = none
++
++// Draws the suspect's replacement solid magenta (needs texture replacements on); nullptr = off.
++void SetFind(const Suspect* s) {
++    g_findId = s ? s->id : "";
++    aurora_texture_replacement_highlight(s ? s->key.c_str() : nullptr);
++    g_status = s ? "Finding " + s->id + " (magenta)" : "Find off";
++}
++
++// Verdicts per scene, UserData/devmenu_verdicts.txt (tab-separated: id, scene, status; scene "*" = every scene). The
++// verdict button sets fine/bugged/fixed for the current scene (a texture can be fine in one level and broken in
++// another); autotest/texhunt/verdicts.py merges them into suspects.csv and adds "fixed" for textures fixed in the pack.
++std::map<std::pair<std::string, std::string>, std::string> g_verdicts;  // (id, scene) -> status
++bool g_hideFine = true;
++
++std::filesystem::path VerdictsPath() { return RuntimeConfigFile::ApplicationDataDirectory() / "devmenu_verdicts.txt"; }
++
++std::string Verdict(const std::string& id, uint32_t scene) {
++    auto it = g_verdicts.find({id, Lower(IdString(scene))});
++    if (it == g_verdicts.end()) it = g_verdicts.find({id, "*"});
++    return it == g_verdicts.end() ? "" : it->second;
++}
++
++void SetVerdict(const std::string& id, uint32_t scene, const std::string& status) {
++    const std::string sceneName = Lower(IdString(scene));
++    if (status.empty()) {
++        g_verdicts.erase({id, sceneName});
++    } else {
++        g_verdicts[{id, sceneName}] = status;
++    }
++    std::ofstream out(VerdictsPath(), std::ios::trunc);
++    out << "# id\tscene\tstatus  (dev menu Textures tab; autotest/texhunt/verdicts.py)\n";
++    for (const auto& [key, vstatus] : g_verdicts) out << key.first << '\t' << key.second << '\t' << vstatus << '\n';
++    g_status = id + (status.empty() ? " unmarked" : " marked " + status) + " in " + sceneName;
++}
++
++// Drawn per level, UserData/devmenu_drawn.txt (tab-separated: id, scene), kept across sessions. aurora notes each
++// replacement on upload; on entering a level the menu clears that and drops the texture caches, so what gets noted after
++// that was drawn in this level.
++std::set<std::pair<std::string, std::string>> g_drawn;  // (id, scene)
++uint32_t g_drawnScene = 0;
++
++std::filesystem::path DrawnPath() { return RuntimeConfigFile::ApplicationDataDirectory() / "devmenu_drawn.txt"; }
++
++bool Drawn(const std::string& id, uint32_t scene) { return g_drawn.count({id, Lower(IdString(scene))}) > 0; }
++
++std::string DrawnScenes(const std::string& id) {
++    std::string out;
++    for (const auto& [did, scene] : g_drawn)
++        if (did == id) out += (out.empty() ? "" : " ") + scene;
++    return out;
++}
 +
 +void LoadSuspects() {
 +    if (g_suspectsLoaded) return;
 +    g_suspectsLoaded = true;
++    std::ifstream drawn(DrawnPath());
++    for (std::string line; std::getline(drawn, line);) {
++        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
++        const size_t tab = line.find('\t');
++        if (line.empty() || line[0] == '#' || tab == std::string::npos) continue;
++        g_drawn.insert({line.substr(0, tab), line.substr(tab + 1)});
++    }
++    std::ifstream verdicts(VerdictsPath());
++    for (std::string line; std::getline(verdicts, line);) {
++        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
++        std::vector<std::string> f;
++        std::istringstream ss(line);
++        for (std::string field; std::getline(ss, field, '\t');) f.push_back(field);
++        if (f.size() < 3 || f[0].empty() || f[0][0] == '#') continue;
++        g_verdicts[{f[0], f[1]}] = f[2];
++    }
 +    std::ifstream in(RuntimeConfigFile::ApplicationDataDirectory() / "devmenu_textures.txt");
 +    for (std::string line; std::getline(in, line);) {
 +        std::vector<std::string> f;
@@ -654,8 +1210,41 @@ index 0000000..e440eee
 +        Suspect s{f[0], f[1], f[2], f[3], f[5], {}};
 +        std::istringstream sc(f[4]);
 +        for (std::string id; sc >> id;) s.scenes.push_back(IdFromString(id));
++        s.effect = f.size() > 6 && f[6].rfind("effect", 0) == 0;
 +        g_suspects.push_back(std::move(s));
 +    }
++}
++
++void UpdateDrawn() {
++    static uint32_t tick = 0;
++    if (!InPlay()) return;
++    const uint32_t scene = CurrentSceneId();
++    if (scene != g_drawnScene) {  // new level: forget the last one's textures
++        g_drawnScene = scene;
++        aurora_texture_replacement_reset_used();
++        return;
++    }
++    if (++tick % 30 != 0) return;
++    LoadSuspects();
++    const std::string sceneName = Lower(IdString(scene));
++    bool added = false;
++    for (const Suspect& s : g_suspects)
++        if (aurora_texture_replacement_used(s.key.c_str())) added |= g_drawn.insert({s.id, sceneName}).second;
++    if (!added) return;
++    std::ofstream out(DrawnPath(), std::ios::trunc);
++    out << "# id\tscene  (dev menu: suspect texture drawn in that level)\n";
++    for (const auto& [id, dscene] : g_drawn) out << id << '\t' << dscene << '\n';
++}
++
++// Spots are per scene: a name can be saved once in each scene. This scene's spot with that name, else the first one.
++const Spot* FindSpot(const std::string& name, uint32_t scene) {
++    const Spot* any = nullptr;
++    for (const Spot& s : g_spots) {
++        if (s.name != name) continue;
++        if (s.scene == scene) return &s;
++        if (!any) any = &s;
++    }
++    return any;
 +}
 +
 +// devmenu.txt (cwd = Play), read every 30 frames while in play and then deleted; results go to devmenu.log.
@@ -670,7 +1259,10 @@ index 0000000..e440eee
 +//   monsters [on|off]   list this scene's monsters; all monsters off (every scene) / back on
 +//   monster N|NAME on|off
 +//   ents                log the scene's entity list
-+//   textures            log which suspect textures (devmenu_textures.txt) have been drawn
++//   textures            log which suspect textures (devmenu_textures.txt) have been drawn in this level
++//   find ID|off         draw that suspect's texture solid magenta / back to normal
++//   freecam on|off      free camera (starts at the game camera)
++//   cam X Y Z YAW PITCH free camera at this pose (degrees; pitch > 0 looks down)
 +void PollCommandFile() {
 +    static uint32_t tick = 0;
 +    if (++tick % 30 != 0 || !InPlay() || g_pendingSpot) return;
@@ -692,13 +1284,13 @@ index 0000000..e440eee
 +        } else if (cmd == "spot") {
 +            LoadSpots();
 +            g_status = "No spot named " + arg;
-+            for (const Spot& s : g_spots)
-+                if (s.name == arg) GoToSpot(s);
++            if (const Spot* s = FindSpot(arg, CurrentSceneId())) GoToSpot(*s);
 +        } else if (cmd == "save") {
 +            LoadSpots();
 +            Spot s;
 +            if (ReadPlayer(s) && s.scene) {
 +                s.name = arg;
++                AddCam(s);
 +                g_spots.push_back(s);
 +                SaveSpots();
 +                g_status = "Saved " + arg;
@@ -753,7 +1345,31 @@ index 0000000..e440eee
 +            LoadSuspects();
 +            g_status = "drawn suspects:";
 +            for (const Suspect& s : g_suspects)
-+                if (aurora_texture_replacement_used(s.key.c_str())) g_status += " " + s.id;
++                if (Drawn(s.id, CurrentSceneId())) g_status += " " + s.id;
++        } else if (cmd == "freecam") {
++            SetFreecam(arg == "on");
++        } else if (cmd == "cam") {
++            FreeCam c;
++            std::istringstream as(arg);
++            if (as >> c.x >> c.y >> c.z >> c.yaw >> c.pitch) {
++                c.on = true;
++                c.yaw *= 3.14159265f / 180.0f;
++                c.pitch *= 3.14159265f / 180.0f;
++                g_cam = c;
++                g_status = "Free camera at " + arg;
++            } else {
++                g_status = "cam X Y Z YAW PITCH";
++            }
++        } else if (cmd == "find") {
++            LoadSuspects();
++            const auto it = std::find_if(g_suspects.begin(), g_suspects.end(), [&](const Suspect& s) { return s.id == arg; });
++            if (arg == "off") {
++                SetFind(nullptr);
++            } else if (it != g_suspects.end()) {
++                SetFind(&*it);
++            } else {
++                g_status = "No suspect " + arg;
++            }
 +        } else if (cmd == "ents") {
 +            const uint32_t scene = CurrentScenePtr();
 +            const uint32_t list = scene ? Read32Or0(scene + 0x78) : 0, count = scene ? Read32Or0(scene + 0x74) : 0;
@@ -793,6 +1409,17 @@ index 0000000..e440eee
 +    ImGui::Text("Game mode %X state %u%s", Read32Or0(kGameMode), Read32Or0(kGameState), InPlay() ? " (in play)" : "");
 +    bool god = g_god;
 +    if (ImGui::Checkbox("God mode (no damage, green Scooby)", &god)) SetGod(god);
++    bool cam = g_cam.on;
++    if (ImGui::Checkbox("Free camera", &cam)) SetFreecam(cam);
++    if (ImGui::IsItemHovered())
++        ImGui::SetTooltip("Pad: left stick move, right stick look, LT/RT down/up, hold A fast, B slow.\n"
++                          "Keys: WASD, Q/E down/up, arrows look, Shift fast, Ctrl slow.\n"
++                          "Scooby stays put. Spots saved now keep the camera.");
++    if (g_cam.on) {
++        ImGui::SameLine();
++        ImGui::TextDisabled("%.1f %.1f %.1f  yaw %.0f pitch %.0f", g_cam.x, g_cam.y, g_cam.z,
++                            g_cam.yaw * 180.0f / 3.14159265f, g_cam.pitch * 180.0f / 3.14159265f);
++    }
 +    if (!g_status.empty()) ImGui::TextWrapped("%s", g_status.c_str());
 +}
 +
@@ -805,6 +1432,7 @@ index 0000000..e440eee
 +        Spot s;
 +        if (ReadPlayer(s) && s.scene) {
 +            s.name = g_newSpotName[0] ? g_newSpotName : Lower(IdString(s.scene)) + " spot " + std::to_string(g_spots.size() + 1);
++            AddCam(s);
 +            g_spots.push_back(s);
 +            SaveSpots();
 +            g_newSpotName[0] = 0;
@@ -888,13 +1516,8 @@ index 0000000..e440eee
 +    ImGui::EndDisabled();
 +}
 +
-+// Textures tab (Suspect / LoadSuspects above PollCommandFile). "Save spot" saves Scooby's position under the suspect's ID.
-+const Spot* FindSpot(const std::string& name) {
-+    for (const Spot& s : g_spots)
-+        if (s.name == name) return &s;
-+    return nullptr;
-+}
-+
++// Textures tab (Suspect / LoadSuspects above PollCommandFile). "Save spot" saves Scooby's position under the suspect's ID
++// in this scene (other scenes keep theirs).
 +void SaveSpotAs(const std::string& name) {
 +    Spot s;
 +    if (!ReadPlayer(s) || !s.scene) {
@@ -902,32 +1525,131 @@ index 0000000..e440eee
 +        return;
 +    }
 +    s.name = name;
-+    g_spots.erase(std::remove_if(g_spots.begin(), g_spots.end(), [&](const Spot& o) { return o.name == name; }), g_spots.end());
++    AddCam(s);
++    g_spots.erase(std::remove_if(g_spots.begin(), g_spots.end(),
++                                 [&](const Spot& o) { return o.name == name && o.scene == s.scene; }),
++                  g_spots.end());
 +    g_spots.push_back(s);
 +    SaveSpots();
 +    g_status = "Saved " + name + " in " + Lower(IdString(s.scene));
 +}
 +
-+void DrawTextures() {
++// Toggles keep their label and turn this colour while on (a changing label would shift the table).
++const ImVec4 kFindColor(0.75f, 0.2f, 0.75f, 1.0f);
++const ImVec4 kFineColor(0.2f, 0.6f, 0.25f, 1.0f);
++const ImVec4 kSavedColor(0.2f, 0.4f, 0.75f, 1.0f);
++
++bool ToggleButton(const char* label, bool on, const ImVec4& col) {
++    if (on) {
++        ImGui::PushStyleColor(ImGuiCol_Button, col);
++        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x * 1.2f, col.y * 1.2f, col.z * 1.2f, 1.0f));
++        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(col.x * 1.4f, col.y * 1.4f, col.z * 1.4f, 1.0f));
++    }
++    const bool pressed = ImGui::SmallButton(label);
++    if (on) ImGui::PopStyleColor(3);
++    return pressed;
++}
++
++// This level's verdict, one button cycling Unset -> Fine -> Bugged -> Fixed -> Unset; fixed width so the table doesn't
++// move, and one ID whatever it says ("###verdict") so the nav cursor stays on it.
++const ImVec4 kBuggedColor(0.75f, 0.2f, 0.2f, 1.0f);
++const ImVec4 kFixedColor(0.25f, 0.45f, 0.8f, 1.0f);
++
++std::string NextVerdict(const std::string& mark) {
++    return mark.empty() ? "fine" : mark == "fine" ? "bugged" : mark == "bugged" ? "fixed" : "";
++}
++
++bool VerdictButton(const std::string& mark) {
++    const ImGuiStyle& style = ImGui::GetStyle();
++    const float width = ImGui::CalcTextSize("Bugged").x + style.FramePadding.x * 2.0f;
++    const bool on = !mark.empty();
++    const ImVec4 col = mark == "fine" ? kFineColor : mark == "bugged" ? kBuggedColor : kFixedColor;
++    if (on) {
++        ImGui::PushStyleColor(ImGuiCol_Button, col);
++        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(col.x * 1.2f, col.y * 1.2f, col.z * 1.2f, 1.0f));
++        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(col.x * 1.4f, col.y * 1.4f, col.z * 1.4f, 1.0f));
++    }
++    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(style.FramePadding.x, 0.0f));  // SmallButton height
++    const char* label = mark == "fine"     ? "Fine###verdict"
++                        : mark == "bugged" ? "Bugged###verdict"
++                        : mark == "fixed"  ? "Fixed###verdict"
++                                           : "Unset###verdict";
++    const bool pressed = ImGui::Button(label, ImVec2(width, 0.0f));
++    ImGui::PopStyleVar();
++    if (on) ImGui::PopStyleColor(3);
++    return pressed;
++}
++
++// Scenes from the level table (menus and boot aren't scenes you can load into or mark).
++bool IsPlayable(uint32_t id) {
++    for (const Level& level : g_levels)
++        for (const Scene& scene : level.scenes)
++            if (scene.id == id) return true;
++    return false;
++}
++
++bool Done(const std::string& verdict) { return verdict == "fine" || verdict == "fixed"; }
++
++// Fine or fixed in how many of the playable scenes that use it, and how many of those there are.
++std::pair<int, int> FineCount(const Suspect& s) {
++    int fine = 0, total = 0;
++    for (uint32_t id : s.scenes) {
++        if (!IsPlayable(id)) continue;
++        ++total;
++        fine += Done(Verdict(s.id, id));
++    }
++    return {fine, total};
++}
++
++// Texture log (Textures tab checkbox, or NO100F_TEXLOG=1 at start): every texture's draw states go to
++// Play\devmenu_texlog.csv (aurora gx.cpp), rows tagged with the scene ("none" before a level is loaded).
++bool g_texLog = [] {
++    const char* v = std::getenv("NO100F_TEXLOG");
++    return v != nullptr && *v != '\0' && std::string(v) != "0";
++}();
++
++void UpdateTexLog() {
++    static std::string last;
++    const uint32_t scene = CurrentSceneId();
++    const std::string want = !g_texLog ? "" : scene ? Lower(IdString(scene)) : "none";
++    if (want == last) return;
++    last = want;
++    aurora_texture_log(want.c_str());
++}
++
++// Rows marked since the menu opened stay listed with "Hide fine/fixed" on, so the cursor isn't lost mid-cycle.
++std::set<std::string> g_markedOpen;
++
++// Textures tab (effects = false) / Effects tab (effects = true: drawn at runtime, e.g. on a kill or a bonk).
++void DrawTextures(bool effects) {
 +    LoadSuspects();
 +    LoadSpots();
 +    LoadLevels();
++    ImGui::Checkbox("Log every texture (devmenu_texlog.csv)", &g_texLog);
 +    if (g_suspects.empty()) {
 +        ImGui::TextWrapped("No suspects: put devmenu_textures.txt in UserData (autotest\\texhunt\\report.py writes it).");
 +        return;
 +    }
 +    ImGui::Checkbox("This scene only", &g_suspectsThisScene);
 +    ImGui::SameLine();
-+    ImGui::TextDisabled("drawn = seen on screen since start");
++    ImGui::Checkbox("Hide fine/fixed", &g_hideFine);
++    ImGui::SameLine();
++    ImGui::TextDisabled("drawn = seen on screen in this level");
 +    const uint32_t cur = CurrentSceneId();
 +    std::string lastLevel;
-+    if (!ImGui::BeginTable("suspects", 5, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) return;
++    if (!ImGui::BeginTable("suspects", 7, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) return;
 +    for (size_t i = 0; i < g_suspects.size(); ++i) {
 +        const Suspect& s = g_suspects[i];
++        if (s.effect != effects) continue;
 +        // boot.HIP textures are loaded for every scene
 +        const bool here = std::find(s.scenes.begin(), s.scenes.end(), cur) != s.scenes.end() ||
 +                          std::find(s.scenes.begin(), s.scenes.end(), IdFromString("BOOT")) != s.scenes.end();
 +        if (g_suspectsThisScene && !here) continue;
++        // "fine" = fine/fixed in this scene (this scene only) / in all its scenes (all scenes)
++        const std::string verdict = Verdict(s.id, cur);
++        const auto [fineScenes, totalScenes] = FineCount(s);
++        const bool fine = g_suspectsThisScene ? Done(verdict) : totalScenes > 0 && fineScenes == totalScenes;
++        if (g_hideFine && fine && !g_markedOpen.count(s.id)) continue;
 +        if (!g_suspectsThisScene && s.level != lastLevel) {
 +            lastLevel = s.level;
 +            ImGui::TableNextRow();
@@ -940,27 +1662,32 @@ index 0000000..e440eee
 +        const ImVec4 col = s.severity == "high" ? ImVec4(1.0f, 0.42f, 0.42f, 1.0f)
 +                           : s.severity == "medium" ? ImVec4(1.0f, 0.72f, 0.3f, 1.0f)
 +                                                    : ImVec4(0.6f, 0.67f, 0.73f, 1.0f);
-+        ImGui::TextColored(col, "%s", s.id.c_str());
++        if (fine) {  // crossed out
++            ImGui::TextDisabled("%s", s.id.c_str());
++            const ImVec2 a = ImGui::GetItemRectMin(), b = ImGui::GetItemRectMax();
++            const float y = (a.y + b.y) * 0.5f;
++            ImGui::GetWindowDrawList()->AddLine(ImVec2(a.x, y), ImVec2(b.x, y), ImGui::GetColorU32(ImGuiCol_TextDisabled));
++        } else {
++            ImGui::TextColored(col, "%s", s.id.c_str());
++        }
 +        ImGui::TableNextColumn();
 +        ImGui::TextUnformatted(s.asset.c_str());
 +        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s\n%s", s.key.c_str(), s.level.c_str());
 +        ImGui::TableNextColumn();
-+        if (aurora_texture_replacement_used(s.key.c_str())) {
++        if (Drawn(s.id, cur)) {
 +            ImGui::TextColored(ImVec4(0.45f, 0.86f, 0.45f, 1.0f), "drawn");
 +        } else {
 +            ImGui::TextDisabled("not yet");
 +        }
++        if (ImGui::IsItemHovered()) {
++            const std::string where = DrawnScenes(s.id);
++            ImGui::SetTooltip("drawn in: %s", where.empty() ? "no level yet" : where.c_str());
++        }
 +        ImGui::TableNextColumn();
-+        const Spot* spot = FindSpot(s.id);
-+        if (here && ImGui::SmallButton(spot && spot->scene == cur ? "Resave spot" : "Save spot")) SaveSpotAs(s.id);
++        const Spot* spot = FindSpot(s.id, cur);
++        if (here && ToggleButton("Save spot", spot && spot->scene == cur, kSavedColor)) SaveSpotAs(s.id);
 +        if (!here) {
-+            // only scenes from the level table (menus aren't scenes you can load into)
-+            const auto it = std::find_if(s.scenes.begin(), s.scenes.end(), [](uint32_t id) {
-+                for (const Level& level : g_levels)
-+                    for (const Scene& scene : level.scenes)
-+                        if (scene.id == id) return true;
-+                return false;
-+            });
++            const auto it = std::find_if(s.scenes.begin(), s.scenes.end(), IsPlayable);
 +            if (it != s.scenes.end()) {
 +                const std::string label = "Go " + Lower(IdString(*it));
 +                if (ImGui::SmallButton(label.c_str())) GoToScene(*it);
@@ -970,20 +1697,72 @@ index 0000000..e440eee
 +        }
 +        ImGui::TableNextColumn();
 +        if (spot) {
-+            if (ImGui::SmallButton("Go to spot")) GoToSpot(*spot);
++            const std::string label = spot->scene == cur ? "Go to spot" : "Go to spot " + Lower(IdString(spot->scene));
++            if (ImGui::SmallButton(label.c_str())) GoToSpot(*spot);
++        }
++        ImGui::TableNextColumn();
++        const bool finding = g_findId == s.id;
++        if (ToggleButton("Find", finding, kFindColor)) SetFind(finding ? nullptr : &s);
++        ImGui::TableNextColumn();
++        if (totalScenes > 1) {
++            ImGui::TextDisabled("%d/%d", fineScenes, totalScenes);
++            if (ImGui::IsItemHovered()) ImGui::SetTooltip("fine or fixed in %d of its %d levels", fineScenes, totalScenes);
++            ImGui::SameLine();
++        }
++        if (here && IsPlayable(cur) && VerdictButton(verdict)) {
++            SetVerdict(s.id, cur, NextVerdict(verdict));
++            g_markedOpen.insert(s.id);
 +        }
 +        ImGui::PopID();
 +    }
 +    ImGui::EndTable();
 +}
 +
++// While Find is on: a label at the bottom centre (also with the menu closed); takes no input or focus.
++void DrawFindToast() {
++    if (g_findId.empty()) return;
++    const ImGuiViewport* vp = ImGui::GetMainViewport();
++    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y - 40.0f),
++                            ImGuiCond_Always, ImVec2(0.5f, 1.0f));
++    ImGui::SetNextWindowBgAlpha(0.75f);
++    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
++                                        ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
++                                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings |
++                                        ImGuiWindowFlags_NoDocking;
++    if (ImGui::Begin("##devmenu_find", nullptr, kFlags))
++        ImGui::TextColored(ImVec4(1.0f, 0.4f, 1.0f, 1.0f), "Finding %s: drawn solid magenta", g_findId.c_str());
++    ImGui::End();
++}
++
 +} // namespace
 +
 +void HandleSdlEvent(const SDL_Event& event) noexcept {
 +    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == SDL_SCANCODE_F8) g_open = !g_open;
++    // LB: not mapped on the default controller layouts (it is L on the NSO GameCube one)
++    if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER && g_open)
++        g_toggleFocus = true;
 +}
 +
 +bool IsOpen() noexcept { return g_open; }
++
++bool BlocksInput() noexcept { return (g_open && g_focused) || g_cam.on; }
++
++// RwCameraBeginUpdate replacement hook (see FreeCam): the main camera's frame gets the free camera pose.
++void ApplyFreecam(uint32_t camera, CpuContext* ctx) {
++    if (!g_cam.on || camera != Read32Or0(kMainCameraPtr)) return;
++    const uint32_t frame = MainCameraFrame();
++    if (!frame) return;
++    float rows[4][3];
++    CamRows(g_cam, rows);
++    for (uint32_t r = 0; r < 4; ++r)
++        for (uint32_t k = 0; k < 3; ++k) {
++            WriteF(frame + 0x10 + r * 0x10 + k * 4, rows[r][k]);  // modelling
++            WriteF(frame + 0x50 + r * 0x10 + k * 4, rows[r][k]);  // LTM
++        }
++    ctx->gpr[3] = frame;
++    func_8016A300(ctx);  // RwFrameUpdateObjects: frame dirty -> view + frustum resynced
++    ctx->gpr[3] = camera;
++}
 +
 +void Draw() noexcept {
 +    (void)kReserved;
@@ -991,10 +1770,30 @@ index 0000000..e440eee
 +    UpdateGod();
 +    UpdateMonsters();
 +    PollCommandFile();
-+    if (!g_open) return;
++    UpdateDrawn();
++    UpdateTexLog();
++    DrawFindToast();
++    UpdateFreecam(g_open && g_focused);
++    const bool wasFocused = g_focused;
++    g_focused = false;
++    if (!g_open) {
++        g_toggleFocus = false;
++        g_markedOpen.clear();
++        return;
++    }
 +    ImGui::SetNextWindowSize(ImVec2(460.0f, 560.0f), ImGuiCond_FirstUseEver);
 +    ImGui::SetNextWindowPos(ImVec2(40.0f, 60.0f), ImGuiCond_FirstUseEver);
-+    if (ImGui::Begin("Dev menu (F8)", &g_open)) {
++    // LB: collapse when leaving the menu, expand + focus when coming back (ImGui puts the nav cursor back on the last item)
++    if (g_toggleFocus) ImGui::SetNextWindowCollapsed(wasFocused);
++    if (g_toggleFocus && !wasFocused) ImGui::SetNextWindowFocus();
++    // NoNavFocus: ImGui's gamepad window switcher (X) would otherwise grab the menu while you play; LB toggles instead
++    const bool visible = ImGui::Begin("Dev menu (F8)", &g_open, ImGuiWindowFlags_NoNavFocus);
++    if (g_toggleFocus && wasFocused) ImGui::SetWindowFocus(nullptr);
++    g_toggleFocus = false;
++    g_focused = g_open && ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
++    if (visible) {
++        ImGui::TextDisabled(g_focused ? "Game input paused: click the game or press LB to move."
++                                      : "Click here or press LB to use the menu.");
 +        DrawStatus();
 +        ImGui::Separator();
 +        if (ImGui::BeginTabBar("devtabs")) {
@@ -1011,7 +1810,11 @@ index 0000000..e440eee
 +                ImGui::EndTabItem();
 +            }
 +            if (ImGui::BeginTabItem("Textures")) {
-+                DrawTextures();
++                DrawTextures(false);
++                ImGui::EndTabItem();
++            }
++            if (ImGui::BeginTabItem("Effects")) {
++                DrawTextures(true);
 +                ImGui::EndTabItem();
 +            }
 +            ImGui::EndTabBar();
@@ -1021,8 +1824,17 @@ index 0000000..e440eee
 +}
 +
 +} // namespace no100f_devmenu
++
++// RwCameraBeginUpdate (0x80168C78) is `return camera->beginUpdate(camera)` (+0x18); native in full so the free camera
++// can replace the main camera's frame first.
++extern "C" void No100f_DevmenuCameraBeginUpdate(CpuContext* ctx) {
++    const uint32_t camera = ctx->gpr[3];
++    no100f_devmenu::ApplyFreecam(camera, ctx);
++    InvokeIndirectCpu(Memory::Read32(camera + 0x18), ctx);
++}
++PPC_NATIVE_OVERRIDE_VOID(80168C78, No100f_DevmenuCameraBeginUpdate, (CpuContext* ctx), (ctx));
 diff --git a/wiicompiled/runtime/src/settings_overlay.cpp b/wiicompiled/runtime/src/settings_overlay.cpp
-index 67c4729..ab960ef 100644
+index 67c4729..8d88814 100644
 --- a/wiicompiled/runtime/src/settings_overlay.cpp
 +++ b/wiicompiled/runtime/src/settings_overlay.cpp
 @@ -7,6 +7,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
@@ -1049,7 +1861,7 @@ index 67c4729..ab960ef 100644
  void ApplyInputBlockState() {
      const bool blocked = controller_mapping_wizard::IsActive() || g_rebind.active ||
 -                         g_exitPromptOpen || g_topBarVisible || StartupScreenVisible();
-+                         g_exitPromptOpen || g_topBarVisible || StartupScreenVisible() || no100f_devmenu::IsOpen();
++                         g_exitPromptOpen || g_topBarVisible || StartupScreenVisible() || no100f_devmenu::BlocksInput();
      PADBlockInput(blocked);
      InputBindings::SetInputBlocked(blocked);
  }

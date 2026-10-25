@@ -73,6 +73,15 @@ Textures tab (for HD pack audits): reads `UserData/devmenu_textures.txt` (tab-se
 `#` comments) and lists those replacement textures per scene, each marked "drawn" once the game has used it since start
 (aurora `aurora_texture_replacement_used(name)`, added by the patch: names are recorded when a replacement is looked up).
 Each row can save a spot named after the ID or go to it; suspects whose scenes include `boot` count in every scene.
+Find (row button or `find <id>`) draws that replacement solid magenta and writes each distinct GX state it is drawn with to
+`Play\devmenu_drawstate.txt` (needs `texture_replacements = true` and a pack file for the key).
+
+Texture log ("Log every texture" checkbox, or env `NO100F_TEXLOG=1` at start): the first draw of each texture key with
+each distinct sampler + GX state in each scene appends a row to `Play\devmenu_texlog.csv` (scene, key, replacement, texmap,
+size, wrap, filters, mips/LODs, alpha compare, blend, z test/func/write, z-before-tex, colour/alpha write, uploaded size).
+Disc textures without a pack file are logged too (every static texture is named at upload, `TextureRef::debugKey`).
+Take it with HD on: aurora keeps palette (TLUT) mirrors only when `texture_replacements = true`, so with HD off every
+C4/C8/C14X2 key gets a zero palette hash. Rows tagged `none` were drawn before the scene ID was set (boot, first frames).
 
 - Scene switch = the game's portal path: write a portal + asset (+0x08 camera, +0x0C marker, +0x10 yaw deg, +0x14 scene ID)
   in a reserved page (0x816FF000, lowers the arena by 4 KB) and set the pending portal `[[0x80245CF4]+0x70]`. The scene
