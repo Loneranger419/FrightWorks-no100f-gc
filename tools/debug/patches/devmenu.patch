@@ -1,8 +1,8 @@
 diff --git a/wiicompiled/aurora-main/include/aurora/aurora.h b/wiicompiled/aurora-main/include/aurora/aurora.h
-index 977cdfe..721925d 100644
+index 335b271..5128dff 100644
 --- a/wiicompiled/aurora-main/include/aurora/aurora.h
 +++ b/wiicompiled/aurora-main/include/aurora/aurora.h
-@@ -198,6 +198,15 @@ bool aurora_get_metalfx_spatial();
+@@ -204,6 +204,15 @@ bool aurora_get_metalfx_spatial();
  bool aurora_is_metalfx_spatial_supported();
  // Button prompt textures for the controller in use: 0 xbox, 1 playstation, 2 nintendo, -1 the game's own.
  void aurora_set_button_icon_style(int style);
@@ -19,10 +19,10 @@ index 977cdfe..721925d 100644
  
  AuroraBackend aurora_get_backend();
 diff --git a/wiicompiled/aurora-main/lib/aurora.cpp b/wiicompiled/aurora-main/lib/aurora.cpp
-index 6d2dc60..e19fae9 100644
+index 07e9e18..e0cf74c 100644
 --- a/wiicompiled/aurora-main/lib/aurora.cpp
 +++ b/wiicompiled/aurora-main/lib/aurora.cpp
-@@ -2188,6 +2188,28 @@ void aurora_set_button_icon_style(int style) {
+@@ -2201,6 +2201,28 @@ void aurora_set_button_icon_style(int style) {
    aurora::gfx::texture_replacement::set_button_icon_style(style);
  #endif
  }
@@ -244,10 +244,10 @@ index a60d9b9..bd07f90 100644
  // take_button_icon_style_change returns true once after it changed, so cached textures can be re-resolved.
  void set_button_icon_style(int style) noexcept;
 diff --git a/wiicompiled/aurora-main/lib/gx/gx.cpp b/wiicompiled/aurora-main/lib/gx/gx.cpp
-index faba81d..2e2ce05 100644
+index 955e2e0..17637b2 100644
 --- a/wiicompiled/aurora-main/lib/gx/gx.cpp
 +++ b/wiicompiled/aurora-main/lib/gx/gx.cpp
-@@ -28,6 +28,7 @@ extern "C" unsigned g_spmAudit[8];
+@@ -29,6 +29,7 @@ extern "C" unsigned g_spmAudit[8];
  #include <cstring>
  #include <mutex>
  #include <optional>
@@ -255,7 +255,7 @@ index faba81d..2e2ce05 100644
  #include <utility>
  #include <vector>
  
-@@ -597,6 +598,16 @@ std::vector<PatchTarget> find_patch_targets(const void* dest) {
+@@ -598,6 +599,16 @@ std::vector<PatchTarget> find_patch_targets(const void* dest) {
  
  namespace {
  
@@ -272,7 +272,7 @@ index faba81d..2e2ce05 100644
  gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
    ZoneScoped;
    static const bool spmTexNoCache = std::getenv("SPM_TEX_NOCACHE") != nullptr;
-@@ -653,6 +664,7 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
+@@ -654,6 +665,7 @@ gfx::TextureHandle resolve_static_texture(const GXTexObj_& obj) {
      handle = gfx::new_static_texture_2d(obj.width(), obj.height(), obj.mip_count(), obj.format(),
                                          {static_cast<const uint8_t*>(obj.data), dataSize}, false, nameStr);
    }
@@ -280,7 +280,7 @@ index faba81d..2e2ce05 100644
    if (canCacheUpload) {
      store_cached_texture(obj, handle);
      if (canUseSourceCache) {
-@@ -722,6 +734,7 @@ gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj, const GX
+@@ -723,6 +735,7 @@ gfx::TextureHandle resolve_static_palette_texture(const GXTexObj_& obj, const GX
                                     {converted.data.data(), converted.data.size()}, false, "GX Static Palette Texture");
      handle->hasArbitraryMips = converted.hasArbitraryMips;
    }
@@ -288,7 +288,7 @@ index faba81d..2e2ce05 100644
    if (!obj.no_cache() && !tlut.no_cache()) {
      store_cached_texture(obj, handle, tlut.tlutObjId, tlut.tlutDataVersion);
      if (canUseSourceCache) {
-@@ -1189,6 +1202,119 @@ void invalidate_static_texture_cache() noexcept {
+@@ -1190,6 +1203,119 @@ void invalidate_static_texture_cache() noexcept {
    g_gxState.stateDirty = true;
  }
  
@@ -408,7 +408,7 @@ index faba81d..2e2ce05 100644
  void clear_copy_texture_cache() noexcept {
    g_gxState.copyTextures.clear();
    g_gxState.copyTextureCache.clear();
-@@ -1370,6 +1496,10 @@ GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noex
+@@ -1371,6 +1497,10 @@ GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noex
  void resolve_sampled_textures(const ShaderInfo& info) noexcept {
    ZoneScoped;
    if (gfx::texture_replacement::take_button_icon_style_change()) invalidate_static_texture_cache();
@@ -419,7 +419,7 @@ index faba81d..2e2ce05 100644
  
    for (u32 i = 0; i < MaxTextures; ++i) {
      if (!info.sampledTextures.test(i)) {
-@@ -1500,6 +1630,8 @@ void resolve_sampled_textures(const ShaderInfo& info) noexcept {
+@@ -1501,6 +1631,8 @@ void resolve_sampled_textures(const ShaderInfo& info) noexcept {
        s_lastStaticSourceNoCopyRevision[i] = 0;
      }
    }
@@ -430,10 +430,10 @@ index faba81d..2e2ce05 100644
  static inline wgpu::BlendFactor to_blend_factor(GXBlendFactor fac, bool isDst, bool alphaComponent) {
 diff --git a/wiicompiled/runtime/include/no100f_devmenu.h b/wiicompiled/runtime/include/no100f_devmenu.h
 new file mode 100644
-index 0000000..c1d7671
+index 0000000..6070339
 --- /dev/null
 +++ b/wiicompiled/runtime/include/no100f_devmenu.h
-@@ -0,0 +1,20 @@
+@@ -0,0 +1,22 @@
 +#pragma once
 +
 +#include <cstdint>
@@ -453,13 +453,38 @@ index 0000000..c1d7671
 +bool BlocksInput() noexcept;
 +// Free camera: called from the RwCameraBeginUpdate override with the camera about to render.
 +void ApplyFreecam(uint32_t camera, CpuContext* ctx);
++// Pad 1 buttons (PAD_BUTTON_*) held by the "devmenu_press.txt" file command, ORed in by PADRead.
++uint16_t PressedButtons() noexcept;
 +} // namespace no100f_devmenu
+diff --git a/wiicompiled/runtime/src/hle/input/pad.cpp b/wiicompiled/runtime/src/hle/input/pad.cpp
+index c8ac957..b9f1b8c 100644
+--- a/wiicompiled/runtime/src/hle/input/pad.cpp
++++ b/wiicompiled/runtime/src/hle/input/pad.cpp
+@@ -4,6 +4,7 @@
+ #include "input_bindings.h"
+ #include "wii_remote_input.h"
+ #include "runtime_log.h"
++#include "no100f_devmenu.h"
+ 
+ #include <aurora/aurora.h>
+ #include <SDL3/SDL_gamepad.h>
+@@ -138,6 +139,10 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
+     }
+     FillTriggersHeldByButtons(statuses);
+     InputBindings::Apply(statuses);
++    if (const uint16_t pressed = no100f_devmenu::PressedButtons()) {
++        statuses[0].err = PAD_ERR_NONE;
++        statuses[0].button |= pressed;
++    }
+     if (uint16_t scripted = 0; WiiRemoteInput::ScriptedPadButtons(scripted)) {
+         statuses[0].err = PAD_ERR_NONE;
+         statuses[0].button |= scripted;
 diff --git a/wiicompiled/runtime/src/no100f_devmenu.cpp b/wiicompiled/runtime/src/no100f_devmenu.cpp
 new file mode 100644
-index 0000000..b9f888a
+index 0000000..1b8cc67
 --- /dev/null
 +++ b/wiicompiled/runtime/src/no100f_devmenu.cpp
-@@ -0,0 +1,1373 @@
+@@ -0,0 +1,1499 @@
 +// DEBUG dev menu (F8) for Scooby-Doo! Night of 100 Frights: teleport to any scene, save spots and go back to them,
 +// god mode, monsters off.
 +//
@@ -484,6 +509,7 @@ index 0000000..b9f888a
 +#include "no100f_devmenu.h"
 +
 +#include <aurora/aurora.h>
++#include <aurora/gfx.h>
 +#include <imgui.h>
 +
 +#include <algorithm>
@@ -502,6 +528,7 @@ index 0000000..b9f888a
 +#include <vector>
 +
 +#include <SDL3/SDL.h>
++#include <dolphin/pad.h>
 +
 +#include "abi_bridge.h"
 +#include "hle_stubs.h"
@@ -524,6 +551,10 @@ index 0000000..b9f888a
 +constexpr uint32_t kAreaTable = 0x801D6428u;       // 13 x 16: name, letter << 24, index, 0
 +constexpr uint32_t kLevelTable = 0x801D651Cu;      // 36-byte entries: title, index, snacks, snacks, tokens, 4 scene IDs
 +constexpr uint32_t kTakeDamage = 0x802459B4u;      // globals + 0x824: sd2.ini TakeDamage
++// Cutscene manager pointer (globals + 0x860): set while a recorded cutscene plays (h001 intro), null in play.
++constexpr uint32_t kCutsceneMgr = 0x802459F0;
++// globals + 0x3B0: 1 while the player has control; 0 during a recorded cutscene or an in-world camera pan (i001 key).
++constexpr uint32_t kPlayerControl = 0x80245540;
 +constexpr uint32_t kGodTint = 0x78FF78FFu;         // material colour RGBA while god mode is on
 +constexpr uint8_t kNpcBaseType = 0x02;
 +
@@ -703,6 +734,7 @@ index 0000000..b9f888a
 +    const uint32_t scene = CurrentScenePtr();
 +    return scene ? Read32Or0(scene + 0x6C) : 0;
 +}
++bool CutscenePlaying() { return Read32Or0(kCutsceneMgr) != 0; }
 +bool InPlay() { return Read32Or0(kGameMode) == 0xB && Read32Or0(kGameState) == 1 && CurrentScenePtr(); }
 +
 +bool ReadPlayer(Spot& s) {
@@ -1263,6 +1295,9 @@ index 0000000..b9f888a
 +//   find ID|off         draw that suspect's texture solid magenta / back to normal
 +//   freecam on|off      free camera (starts at the game camera)
 +//   cam X Y Z YAW PITCH free camera at this pose (degrees; pitch > 0 looks down)
++//   cutscene            "cutscene yes|no control yes|no": recorded cutscene playing (devmenu_press.txt skips it), player
++//                       has control (no during cutscenes and in-world camera pans)
++//   perf                draw calls of the last frame + present timing (fps, average/p95 frame time)
 +void PollCommandFile() {
 +    static uint32_t tick = 0;
 +    if (++tick % 30 != 0 || !InPlay() || g_pendingSpot) return;
@@ -1346,6 +1381,25 @@ index 0000000..b9f888a
 +            g_status = "drawn suspects:";
 +            for (const Suspect& s : g_suspects)
 +                if (Drawn(s.id, CurrentSceneId())) g_status += " " + s.id;
++        } else if (cmd == "cutout") {
++#ifdef AURORA_HAS_CUTOUT_MODE
++            if (!arg.empty()) aurora_set_cutout_mode(std::atoi(arg.c_str()));
++            g_status = "cutout mode " + std::to_string(aurora_get_cutout_mode());
++#else
++            g_status = "cutout: not in this build";
++#endif
++        } else if (cmd == "cutscene") {
++            g_status = std::string(CutscenePlaying() ? "cutscene yes" : "cutscene no") +
++                       (Read32Or0(kPlayerControl) == 1 ? " control yes" : " control no");
++        } else if (cmd == "perf") {
++            AuroraPresentTiming t{};
++            aurora_get_present_timing(&t);
++            const AuroraStats* st = aurora_get_stats();
++            char b[192];
++            std::snprintf(b, sizeof b, "perf draws %u merged %u fps %.1f avg %.2f ms p95 %.2f ms jitter %.2f ms",
++                          st ? st->drawCallCount : 0u, st ? st->mergedDrawCallCount : 0u, t.framesPerSecond,
++                          t.averageFrameTimeMs, t.p95FrameTimeMs, t.jitterMs);
++            g_status = b;
 +        } else if (cmd == "freecam") {
 +            SetFreecam(arg == "on");
 +        } else if (cmd == "cam") {
@@ -1626,6 +1680,14 @@ index 0000000..b9f888a
 +    LoadSpots();
 +    LoadLevels();
 +    ImGui::Checkbox("Log every texture (devmenu_texlog.csv)", &g_texLog);
++#ifdef AURORA_HAS_CUTOUT_MODE
++    // Branches with aurora's cut-out modes (feat/hd-cutout-twopass): switch live to compare.
++    static const char* const kCutoutModes[] = {"Game (alpha > 0)", "Cut (HD: alpha > 127)", "Two-pass (HD)",
++                                               "Two-pass (all textures)"};
++    int cutout = aurora_get_cutout_mode();
++    ImGui::SetNextItemWidth(220.0f);
++    if (ImGui::Combo("Cut-outs (F7 cycles)", &cutout, kCutoutModes, 4)) aurora_set_cutout_mode(cutout);
++#endif
 +    if (g_suspects.empty()) {
 +        ImGui::TextWrapped("No suspects: put devmenu_textures.txt in UserData (autotest\\texhunt\\report.py writes it).");
 +        return;
@@ -1734,13 +1796,100 @@ index 0000000..b9f888a
 +    ImGui::End();
 +}
 +
++// F7 (branches with aurora's cut-out modes): cycle the mode, shown for 2 s at the bottom of the screen.
++uint64_t g_cutoutToastUntil = 0;
++
++void CycleCutoutMode() {
++#ifdef AURORA_HAS_CUTOUT_MODE
++    aurora_set_cutout_mode((aurora_get_cutout_mode() + 1) % 4);
++    g_cutoutToastUntil = SDL_GetTicks() + 2000;
++#endif
++}
++
++void DrawCutoutToast() {
++#ifdef AURORA_HAS_CUTOUT_MODE
++    if (SDL_GetTicks() >= g_cutoutToastUntil) return;
++    static const char* const kNames[] = {"Game (alpha > 0)", "Cut (HD: alpha > 127)", "Two-pass (HD)",
++                                         "Two-pass (all textures)"};
++    const ImGuiViewport* vp = ImGui::GetMainViewport();
++    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x * 0.5f, vp->WorkPos.y + vp->WorkSize.y - 80.0f),
++                            ImGuiCond_Always, ImVec2(0.5f, 1.0f));
++    ImGui::SetNextWindowBgAlpha(0.75f);
++    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize |
++                                        ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoMove |
++                                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoSavedSettings |
++                                        ImGuiWindowFlags_NoDocking;
++    if (ImGui::Begin("##devmenu_cutout", nullptr, kFlags))
++        ImGui::Text("Cut-outs: %d %s", aurora_get_cutout_mode(), kNames[aurora_get_cutout_mode() & 3]);
++    ImGui::End();
++#endif
++}
++
++// Button presses for scripts, also while a cutscene plays (devmenu.txt is read only in play): every 30 frames
++// "devmenu_press.txt" is read and deleted; each line "BUTTON[+BUTTON...] [FRAMES] [cutscene]" (a b x y z start up down
++// left right, default 10 frames) is held on pad 1 for that many frames, lines one after another. "cutscene": only if a
++// recorded cutscene is playing then (A skips it after a few seconds; in play A jumps). Logged to devmenu.log.
++struct Press {
++    uint16_t buttons;
++    int frames;
++};
++std::vector<Press> g_presses;
++int g_pressFrames = 0;  // frames the front press has been held
++
++uint16_t PressBits(const std::string& names) {
++    static const std::map<std::string, uint16_t> kBits{
++        {"a", PAD_BUTTON_A},       {"b", PAD_BUTTON_B},       {"x", PAD_BUTTON_X},         {"y", PAD_BUTTON_Y},
++        {"z", PAD_TRIGGER_Z},      {"start", PAD_BUTTON_START}, {"up", PAD_BUTTON_UP},     {"down", PAD_BUTTON_DOWN},
++        {"left", PAD_BUTTON_LEFT}, {"right", PAD_BUTTON_RIGHT}};
++    uint16_t bits = 0;
++    std::istringstream ss(names);
++    for (std::string n; std::getline(ss, n, '+');) {
++        const auto it = kBits.find(Lower(n));
++        if (it == kBits.end()) return 0;
++        bits |= it->second;
++    }
++    return bits;
++}
++
++void UpdatePresses() {
++    static uint32_t tick = 0;
++    if (++tick % 30 == 0) {
++        if (std::ifstream in{"devmenu_press.txt"}) {
++            std::ofstream log("devmenu.log", std::ios::app);
++            for (std::string l; std::getline(in, l);) {
++                std::istringstream ss(l);
++                std::string names;
++                int frames = 10;
++                std::string when;
++                if (!(ss >> names)) continue;
++                ss >> frames >> when;
++                const uint16_t bits = PressBits(names);
++                const bool skip = when == "cutscene" && !CutscenePlaying();
++                if (bits && frames > 0 && !skip) g_presses.push_back({bits, frames});
++                log << "press " << l << " -> " << (!bits ? "unknown button" : skip ? "skipped (no cutscene)" : "queued") << "\n";
++            }
++            in.close();
++            std::remove("devmenu_press.txt");
++        }
++    }
++    if (!g_presses.empty() && ++g_pressFrames > g_presses.front().frames) {
++        g_presses.erase(g_presses.begin());
++        g_pressFrames = 0;
++    }
++}
++
 +} // namespace
 +
 +void HandleSdlEvent(const SDL_Event& event) noexcept {
 +    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == SDL_SCANCODE_F8) g_open = !g_open;
++    if (event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == SDL_SCANCODE_F7) CycleCutoutMode();
 +    // LB: not mapped on the default controller layouts (it is L on the NSO GameCube one)
 +    if (event.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN && event.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER && g_open)
 +        g_toggleFocus = true;
++}
++
++uint16_t PressedButtons() noexcept {
++    return g_presses.empty() || g_pressFrames == 0 ? 0 : g_presses.front().buttons;
 +}
 +
 +bool IsOpen() noexcept { return g_open; }
@@ -1766,6 +1915,7 @@ index 0000000..b9f888a
 +
 +void Draw() noexcept {
 +    (void)kReserved;
++    UpdatePresses();
 +    UpdatePending();
 +    UpdateGod();
 +    UpdateMonsters();
@@ -1773,6 +1923,7 @@ index 0000000..b9f888a
 +    UpdateDrawn();
 +    UpdateTexLog();
 +    DrawFindToast();
++    DrawCutoutToast();
 +    UpdateFreecam(g_open && g_focused);
 +    const bool wasFocused = g_focused;
 +    g_focused = false;

@@ -68,6 +68,16 @@ by one in this scene). Spots: `UserData/devmenu_spots.txt` (`I004 x y z yawRad n
 `Play/devmenu.txt` (every 30 frames while in play, then deleted; results in `Play/devmenu.log`): `scene ID`, `spot NAME`,
 `save NAME`, `tp X Y Z [YAWDEG]`, `where`, `peek ADDR [N]`, `frame`, `god on|off`, `monsters [on|off]` (list / all),
 `monster N|NAME on|off`, `ents` (scene entity list), `textures`. Doesn't touch warp flags or the save file.
+`cutout N` (cut-out draw mode, needs aurora's `AURORA_HAS_CUTOUT_MODE`; F7 cycles), `perf` (draw calls + present
+timing), `cutscene` (`cutscene yes|no control yes|no`).
+
+Level intros (first visit only): a recorded cutscene sets the cutscene manager pointer `0x802459F0` (globals + 0x860) and
+is skipped with pad A once the game allows it (per-cutscene delay); `0x80245540` (globals + 0x3B0) is 1 only while the
+player has control (0 in cutscenes and in-world camera pans such as the i001 key, which can't be skipped; dialogue boxes
+like w028's Fred are in control and advance with A). The game counts all of these as "in play". Button presses for
+scripts: `Play/devmenu_press.txt`, read every 30 frames even outside play, lines `BUTTON[+BUTTON] [FRAMES] [cutscene]`
+(`cutscene` = only while one plays), injected into pad 1 by PADRead. `autotest	exhunt\look.ps1` presses A every 2 s
+while `cutscene yes`, then waits for `control yes`.
 
 Textures tab (for HD pack audits): reads `UserData/devmenu_textures.txt` (tab-separated `id file severity asset scenes level`,
 `#` comments) and lists those replacement textures per scene, each marked "drawn" once the game has used it since start
