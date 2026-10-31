@@ -21,6 +21,7 @@ extern "C" unsigned g_spmAudit[8];
 #include <tracy/Tracy.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cfloat>
 #include <chrono>
 #include <cstdint>
@@ -2000,6 +2001,72 @@ void populate_pipeline_config(PipelineConfig& config, GXPrimitive primitive, GXV
   config.depthUpdate = g_gxState.depthCompare && g_gxState.depthUpdate;
   config.alphaUpdate = effective_alpha_update(g_gxState.pixelFmt, g_gxState.alphaUpdate);
   config.colorUpdate = g_gxState.colorUpdate;
+}
+
+// Cut-outs: materials like leaves, grass and webs are drawn with alpha compare "alpha > 0" (or another low ref),
+// blending and depth write. Every pixel with any alpha writes depth, so:
+//  - an HD replacement's faint alpha round each shape hides whatever is drawn behind it later (a halo);
+//  - faint parts of the game's own soft textures do the same (the hub web's dark mesh over the pot);
+//  - the outline is wherever the magnified alpha first rises above 0: a hard edge on the texel grid.
+// CutoutMode::Cut raises the test to alpha > 127 for replacements (smooth outline, no halo, but soft textures lose
+// their faint parts). TwoPass draws the solid part (alpha > 127) with depth write, then the faint part (low ref <
+// alpha <= 127) blended without depth write, deferred until the solid scene behind it is drawn (the game draws
+// cut-outs early): faint pixels blend over what is really behind them and hide nothing. TwoPassAll (the default) does
+// that for original textures too (not like the console or Dolphin, which show the halos).
+constexpr u32 CutoutSolidRef = 127;
+static std::atomic<CutoutMode> s_cutoutMode{CutoutMode::TwoPassAll};  // set from the game thread (dev menu)
+
+void set_cutout_mode(CutoutMode mode) noexcept { s_cutoutMode.store(mode, std::memory_order_relaxed); }
+CutoutMode cutout_mode() noexcept { return s_cutoutMode.load(std::memory_order_relaxed); }
+
+static bool low_alpha_greater_test(const AlphaCompare& ac) noexcept {
+  const auto low = [](GXCompare comp, u32 ref) { return comp == GX_GREATER && ref < CutoutSolidRef; };
+  const auto ok = [&](GXCompare comp, u32 ref) { return comp == GX_ALWAYS || low(comp, ref); };
+  return ac.op == GX_AOP_AND && ok(ac.comp0, ac.ref0) && ok(ac.comp1, ac.ref1) &&
+         (low(ac.comp0, ac.ref0) || low(ac.comp1, ac.ref1));
+}
+
+bool cutout_state_active() noexcept {
+  return cutout_mode() != CutoutMode::Game && g_gxState.depthCompare && g_gxState.depthUpdate &&
+         low_alpha_greater_test(g_gxState.alphaCompare);
+}
+
+CutoutPasses cutout_passes(const ShaderInfo& info) noexcept {
+  if (!cutout_state_active()) {
+    return CutoutPasses::None;
+  }
+  bool sampled = false;
+  bool replacement = false;
+  for (u32 i = 0; i < MaxTextures; ++i) {
+    const auto& tex = g_gxState.textures[i];
+    if (info.sampledTextures.test(i) && tex) {
+      sampled = true;
+      replacement = replacement || tex.ref->isReplacement;
+    }
+  }
+  switch (cutout_mode()) {
+  case CutoutMode::Cut:
+    return replacement ? CutoutPasses::Cut : CutoutPasses::None;
+  case CutoutMode::TwoPass:
+    return replacement ? CutoutPasses::TwoPass : CutoutPasses::None;
+  case CutoutMode::TwoPassAll:
+    return sampled ? CutoutPasses::TwoPass : CutoutPasses::None;
+  default:
+    return CutoutPasses::None;
+  }
+}
+
+void apply_cutout_solid(PipelineConfig& config) noexcept {
+  auto& ac = config.shaderConfig.alphaCompare;
+  if (ac.comp0 == GX_GREATER) ac.ref0 = std::max(ac.ref0, CutoutSolidRef);
+  if (ac.comp1 == GX_GREATER) ac.ref1 = std::max(ac.ref1, CutoutSolidRef);
+}
+
+void apply_cutout_fringe(PipelineConfig& config) noexcept {
+  auto& ac = config.shaderConfig.alphaCompare;
+  const u32 low = std::max(ac.comp0 == GX_GREATER ? ac.ref0 : 0u, ac.comp1 == GX_GREATER ? ac.ref1 : 0u);
+  ac = AlphaCompare{.comp0 = GX_GREATER, .ref0 = low, .op = GX_AOP_AND, .comp1 = GX_LEQUAL, .ref1 = CutoutSolidRef};
+  config.depthUpdate = false;
 }
 
 static TextureBindGroupCacheKey make_texture_bind_group_cache_key(const ShaderInfo& info) noexcept {

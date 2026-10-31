@@ -2282,7 +2282,11 @@ static const CachedPipelineState& cached_pipeline_state(const PipelineConfig& co
 }
 
 // Resolving a pipeline the long way costs a ~2.7KB zero-init, a full populate_pipeline_config, an XXH3 over the whole config and a memcmp against the hash-indexed slot -- roughly 11KB of memory traffic for a result that is almost always identical to the previous draw's.
-static const CachedPipelineState& resolve_pipeline_state(GXPrimitive prim, GXVtxFmt fmt) {
+// variant: a cut-out draw's solid or fringe pass (apply_cutout_solid / apply_cutout_fringe, gx.cpp). Each variant has
+// its own memo so the passes of one draw don't throw each other's away.
+enum class PipelineVariant : u8 { Game, CutoutSolid, CutoutFringe };
+static const CachedPipelineState& resolve_pipeline_state(GXPrimitive prim, GXVtxFmt fmt,
+                                                         PipelineVariant variant = PipelineVariant::Game) {
   struct Memo {
     const CachedPipelineState* state = nullptr;
     u32 generation = 0;
@@ -2290,7 +2294,8 @@ static const CachedPipelineState& resolve_pipeline_state(GXPrimitive prim, GXVtx
     GXPrimitive prim = static_cast<GXPrimitive>(0);
     GXVtxFmt fmt = static_cast<GXVtxFmt>(0);
   };
-  static Memo memo{};
+  static Memo memos[3]{};
+  Memo& memo = memos[static_cast<u8>(variant)];
 
   const u32 sampleCount = gfx::get_sample_count();
   const u32 generation = g_gxState.pipelineStateGeneration;
@@ -2301,6 +2306,11 @@ static const CachedPipelineState& resolve_pipeline_state(GXPrimitive prim, GXVtx
 
   PipelineConfig config{};
   populate_pipeline_config(config, prim, fmt);
+  if (variant == PipelineVariant::CutoutSolid) {
+    apply_cutout_solid(config);
+  } else if (variant == PipelineVariant::CutoutFringe) {
+    apply_cutout_fringe(config);
+  }
   // cached_pipeline_state hands back a reference into a fixed direct-mapped table, so the address stays valid; the entry it points at can only be rewritten by another call to that function, and every such call goes through this miss path and replaces the memo in the same breath.
   const CachedPipelineState& state = cached_pipeline_state(config);
   memo = Memo{
@@ -3255,10 +3265,27 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
     ranges.vaRanges[i - GX_VA_POS] = array.cachedRange;
   }
 
-  const auto& pipelineState = resolve_pipeline_state(prim, fmt);
+  const CachedPipelineState* pipelineStatePtr = &resolve_pipeline_state(prim, fmt);
+  resolve_sampled_textures(pipelineStatePtr->shaderInfo);
+  // Only the resolved textures tell whether an HD replacement is drawn. The cut-out variants change the alpha test and
+  // depth write only, so the textures, bind groups and uniforms are the same for every pass.
+  // The fringe pass's pipeline is copied out at once: a later resolve can rewrite the cache slot it lives in.
+  std::optional<std::pair<decltype(pipelineStatePtr->ref), decltype(pipelineStatePtr->dstAlpha)>> fringe;
+  switch (cutout_passes(pipelineStatePtr->shaderInfo)) {
+  case CutoutPasses::Cut:
+    pipelineStatePtr = &resolve_pipeline_state(prim, fmt, PipelineVariant::CutoutSolid);
+    break;
+  case CutoutPasses::TwoPass: {
+    const auto& fringeState = resolve_pipeline_state(prim, fmt, PipelineVariant::CutoutFringe);
+    fringe.emplace(fringeState.ref, fringeState.dstAlpha);
+    pipelineStatePtr = &resolve_pipeline_state(prim, fmt, PipelineVariant::CutoutSolid);
+    break;
+  }
+  default:
+    break;
+  }
+  const auto& pipelineState = *pipelineStatePtr;
   const auto& info = pipelineState.shaderInfo;
-
-  resolve_sampled_textures(info);
 
   const auto bindGroups = build_bind_groups(info);
 
@@ -3295,7 +3322,7 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
   } else if (prim == GX_POINTS) {
     instanceCount = vtxCount;
   }
-  gfx::push_draw_command(DrawData{
+  DrawData draw{
       .pipeline = pipeline,
       .vertRange = vertRange,
       .idxRange = idxRange,
@@ -3307,8 +3334,25 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
       .expandedPrimitive = prim == GX_LINES || prim == GX_LINESTRIP || prim == GX_POINTS,
       .bindGroups = bindGroups,
       .dstAlpha = pipelineState.dstAlpha,
-  });
-  g_gxState.stateDirty = false;
+  };
+  if (!g_gxState.depthUpdate) {
+    // Draws without depth write (the translucent part of the scene, HUD) come after the solid scene: draw the
+    // deferred cut-out fringes before them.
+    gfx::flush_deferred_draws();
+  }
+  gfx::push_draw_command(draw);
+  if (fringe) {
+    // Same geometry again with the fringe pipeline, deferred until the solid scene behind it is drawn (the game
+    // draws cut-outs early: a fringe drawn in place would be painted over by the scenery behind it). The next
+    // draw must not merge into the solid pass: merging extends only the last recorded draw, so the fringe would
+    // miss the merged geometry.
+    draw.pipeline = fringe->first;
+    draw.dstAlpha = fringe->second;
+    gfx::push_deferred_draw_command(draw);
+    g_gxState.stateDirty = true;
+  } else {
+    g_gxState.stateDirty = false;
+  }
   if (flatSave) {
     g_gxState.tevStages[0] = flatSave->st0;
     g_gxState.numTevStages = flatSave->numTev;

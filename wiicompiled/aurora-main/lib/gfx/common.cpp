@@ -178,6 +178,9 @@ struct RenderPass {
   // failing every subsequent depth test and making whatever's drawn into it vanish).
   float clearDepthValue = gx::UseReversedZ ? 0.f : 1.f;
   CommandList commands;
+  // Cut-out fringes (gx::CutoutPasses::TwoPass): drawn after the pass's own commands unless a
+  // non-depth-writing draw or a clear flushes them into `commands` first (flush_deferred_draws).
+  CommandList deferred;
   bool clearColor = true;
   bool clearDepth = true;
   // The resolve destination outlives the frame with no re-issue path (one-shot
@@ -235,7 +238,10 @@ static void release_command_list(CommandList&& list) noexcept {
   g_commandListPool.emplace_back(std::move(list));
 }
 
-static void release_render_pass(RenderPass& pass) noexcept { release_command_list(std::move(pass.commands)); }
+static void release_render_pass(RenderPass& pass) noexcept {
+  release_command_list(std::move(pass.commands));
+  release_command_list(std::move(pass.deferred));
+}
 
 static void recycle_render_passes(std::vector<RenderPass>& passes) noexcept {
   for (auto& pass : passes) {
@@ -507,6 +513,46 @@ static void push_draw_command(ShaderDrawCommand data) {
   ++g_drawCallCount;
 }
 
+static Viewport g_cachedViewport;
+static ClipRect g_cachedScissor;
+
+void push_deferred_draw_command(const gx::DrawData& data) {
+  if (!has_current_render_pass())
+    UNLIKELY { return; }
+  auto& list = g_renderPasses[g_currentRenderPass].deferred;
+  // Each deferred draw carries the viewport and scissor it was recorded with.
+  const Viewport* lastViewport = nullptr;
+  const ClipRect* lastScissor = nullptr;
+  for (auto it = list.rbegin(); it != list.rend() && (!lastViewport || !lastScissor); ++it) {
+    if (!lastViewport && it->type == CommandType::SetViewport) lastViewport = &it->data.setViewport;
+    if (!lastScissor && it->type == CommandType::SetScissor) lastScissor = &it->data.setScissor;
+  }
+  if (!lastViewport || *lastViewport != g_cachedViewport) {
+    list.push_back({.type = CommandType::SetViewport, .data = Command::Data{.setViewport = g_cachedViewport}});
+  }
+  if (!lastScissor || *lastScissor != g_cachedScissor) {
+    list.push_back({.type = CommandType::SetScissor, .data = Command::Data{.setScissor = g_cachedScissor}});
+  }
+  list.push_back({
+      .type = CommandType::Draw,
+#ifdef AURORA_GFX_DEBUG_GROUPS
+      .debugGroupStack = g_debugFrame.groups,
+#endif
+      .data = Command::Data{.draw = ShaderDrawCommand{.type = ShaderType::GX, .gx = data}},
+  });
+  ++g_drawCallCount;
+}
+
+void flush_deferred_draws() {
+  if (!has_current_render_pass()) return;
+  auto& pass = g_renderPasses[g_currentRenderPass];
+  if (pass.deferred.empty()) return;
+  pass.commands.insert(pass.commands.end(), pass.deferred.begin(), pass.deferred.end());
+  pass.deferred.clear();
+  push_command(CommandType::SetViewport, Command::Data{.setViewport = g_cachedViewport});
+  push_command(CommandType::SetScissor, Command::Data{.setScissor = g_cachedScissor});
+}
+
 Vec2<uint32_t> get_frame_buffer_size() noexcept {
   if (webgpu::g_frameBuffer.size.width != 0 && webgpu::g_frameBuffer.size.height != 0) {
     return {webgpu::g_frameBuffer.size.width, webgpu::g_frameBuffer.size.height};
@@ -525,7 +571,6 @@ Vec2<uint32_t> get_render_target_size() noexcept {
   return get_frame_buffer_size();
 }
 
-static Viewport g_cachedViewport;
 void set_viewport(const Viewport& cmd) noexcept {
   if (cmd != g_cachedViewport) {
     push_command(CommandType::SetViewport, Command::Data{.setViewport = cmd});
@@ -533,7 +578,6 @@ void set_viewport(const Viewport& cmd) noexcept {
   }
 }
 
-static ClipRect g_cachedScissor;
 void set_scissor(const ClipRect& cmd) noexcept {
   if (cmd != g_cachedScissor) {
     push_command(CommandType::SetScissor, Command::Data{.setScissor = cmd});
@@ -543,6 +587,7 @@ void set_scissor(const ClipRect& cmd) noexcept {
 
 template <>
 void push_draw_command(clear::DrawData data) {
+  flush_deferred_draws();
   if (data.uniformRange.size == 0) {
     ensure_staging_space({0, staging_uniform_bytes(16), 0, 0});
     const std::array clearUniform{
@@ -1395,7 +1440,8 @@ static void render_impl(std::vector<RenderPass>& renderPasses, wgpu::CommandEnco
         tex_palette_conv::run(cmd, conv);
       }
     }
-    const bool hasRenderWork = passInfo.clearColor || passInfo.clearDepth || !passInfo.commands.empty();
+    const bool hasRenderWork =
+        passInfo.clearColor || passInfo.clearDepth || !passInfo.commands.empty() || !passInfo.deferred.empty();
     if (i == renderPasses.size() - 1) {
       ASSERT(!passInfo.resolveTarget, "Final render pass must not have resolve target");
     } else if (!(passInfo.resolveTarget && encodeTextureBakes) && !hasRenderWork) {
@@ -1601,7 +1647,9 @@ static void render_pass_impl(const wgpu::RenderPassEncoder& pass, const std::vec
   pass.SetBindGroup(0, g_staticBindGroup);
   pass.SetBindGroup(2, gx::g_emptyTextureBindGroup);
 
-  for (const auto& cmd : renderPasses[idx].commands) {
+  const auto& passCommands = renderPasses[idx];
+  for (const CommandList* list : {&passCommands.commands, &passCommands.deferred})
+  for (const auto& cmd : *list) {
 #ifdef AURORA_GFX_DEBUG_GROUPS
     {
       size_t firstDiff = lastDebugGroupStack.size();
