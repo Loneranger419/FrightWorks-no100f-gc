@@ -207,9 +207,10 @@ typedef enum {
 void aurora_set_metalfx_spatial(bool enabled);
 bool aurora_get_metalfx_spatial();
 bool aurora_is_metalfx_spatial_supported();
-// Button prompt textures for the controller in use: 0 xbox, 1 playstation, 2 nintendo, -1 the game's own;
-// +3 for the same set with B and X swapped (original Xbox controls in gameplay).
-void aurora_set_button_icon_style(int style);
+// Button prompts for the controller in use: family 0 xbox, 1 playstation, 2 nintendo, -1 the game's own GameCube
+// icons. buttons[4]: the pad button (controller_button_names.h config name, e.g. "south") drawn for the GameCube A,
+// B, X and Y buttons; NULL, "" or a button without an icon = that GameCube button's usual one.
+void aurora_set_button_icons(int family, const char* const buttons[4]);
 // Dev menu (F8): whether texture_replacements/<name>.png|.dds has been drawn since start.
 bool aurora_texture_replacement_used(const char* name);
 // Dev menu (F8): forget what has been drawn (the dev menu tracks drawn per level).

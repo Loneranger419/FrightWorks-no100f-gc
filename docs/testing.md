@@ -149,8 +149,9 @@ useful:
   `$env:NSMBW_INPUT_SCRIPT = '10000:PLUS,12000:DOWN,13500:A'` = press Start at 10 s, D-pad down at 12 s, A at 13.5 s
   (ms after the game first reads input; optional third field = hold time in ms, default 150). Buttons: `A`, `B`,
   `PLUS` (Start), `ONE` (X), `TWO` (Y), `MINUS` (Z), `UP`/`DOWN`/`LEFT`/`RIGHT`.
-- **Button prompts**: `$env:BUTTON_ICONS = 'xbox'` (or `playstation`, `nintendo`) forces a prompt set; the sets are
-  built by `python tools\make-button-icons.py --out Play\UserData\button_icons` (needs ImageMagick and the HD pack).
+- **Button prompts**: `$env:BUTTON_ICONS = 'xbox'` (or `playstation`, `nintendo`) forces a prompt set; the game puts
+  the prompt picture together from one icon per pad button, following player 1's mapping. The icons are built by
+  `python tools\make-button-icons.py --out Play\UserData\button_icons` (needs ImageMagick and the HD pack).
 - **Audio capture**: `$env:AUDIO_RAW_DUMP = 'C:\temp\out.raw'` writes the mixed output; analysis tools in
   `tools\debug\audio\`.
 - Remove test variables afterwards: `Remove-Item Env:NO100F_*, Env:AX_*, Env:NSMBW_*, Env:AUDIO_*, Env:BUTTON_ICONS -ErrorAction SilentlyContinue`.

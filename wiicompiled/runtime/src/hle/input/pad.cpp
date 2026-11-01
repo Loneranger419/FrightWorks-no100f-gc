@@ -3,6 +3,7 @@
 #include "hle/controller_status_contract.h"
 #include "hle/no100f_pad_actions.h"
 #include "hle/no100f_xbox_layout.h"
+#include "controller_button_names.h"
 #include "input_bindings.h"
 #include "wii_remote_input.h"
 #include "runtime_config.h"
@@ -50,6 +51,29 @@ bool NativeButtonHeld(SDL_Gamepad* gamepad, uint32_t nativeButton) {
 
 // A digital button bound to L or R has no analog travel of its own. On real
 // hardware the click only engages at full depression, so report a full pull.
+// The pad buttons player 1's GameCube A, B, X and Y are mapped to (config names, nullptr = not mapped), for the
+// button prompts. `swapBX`: the original Xbox layout in gameplay, where the GameCube B button does X's job and back.
+std::array<const char*, 4> PromptButtons(bool swapBX) {
+    static constexpr u16 kSlots[] = {PAD_BUTTON_A, PAD_BUTTON_B, PAD_BUTTON_X, PAD_BUTTON_Y};
+    std::array<const char*, 4> out{};
+    u32 count = 0;
+    const PADButtonMapping* mappings = PADGetButtonMappings(0, &count);
+    for (size_t slot = 0; slot < out.size(); ++slot) {
+        for (u32 i = 0; mappings != nullptr && i < count; ++i) {
+            const u32 native = mappings[i].nativeButton;
+            if (mappings[i].padButton != kSlots[slot] || native == PAD_NATIVE_BUTTON_INVALID ||
+                native == PAD_NATIVE_BUTTON_DISABLED) {
+                continue;
+            }
+            const auto& item = ControllerNames::NativeButtonForValue(native);
+            if (item.nativeButton != PAD_NATIVE_BUTTON_INVALID) out[slot] = item.configName;
+            break;
+        }
+    }
+    if (swapBX) std::swap(out[1], out[2]);
+    return out;
+}
+
 void FillTriggersHeldByButtons(PADStatus* statuses) {
     if (InputBindings::InputBlocked()) {
         return;
@@ -159,8 +183,8 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     // between "connected" and "no controller" every time the overlay toggles.
     WiiRemoteInput::HideRemotesFromPad(statuses, PAD_CHANMAX);
 
-    // On-screen button prompts follow the first connected controller (UserData/button_icons, tools/make-button-icons.py);
-    // with the Xbox layout, gameplay uses the B/X-swapped set (style + 3).
+    // On-screen button prompts follow the first connected controller and player 1's button mapping (UserData/button_icons,
+    // tools/make-button-icons.py); with the Xbox layout, gameplay swaps B and X.
     static int family = -1;
     if (static unsigned n = 0; n++ % 30 == 0) {
         int count = 0, style = -1;
@@ -176,7 +200,8 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
         }
         family = style;
     }
-    aurora_set_button_icon_style(family >= 0 && xboxLayout && !g_xboxMenu ? family + 3 : family);
+    const auto promptButtons = PromptButtons(xboxLayout && !g_xboxMenu);
+    aurora_set_button_icons(family, promptButtons.data());
     FillTriggersHeldByButtons(statuses);
     InputBindings::Apply(statuses);
     if (const uint16_t pressed = no100f_devmenu::PressedButtons()) {

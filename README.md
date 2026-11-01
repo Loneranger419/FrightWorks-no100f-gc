@@ -22,6 +22,7 @@ ports of the other console versions may follow.
 - Restored Creeper window animation in Mystic Manor's Mystery Machine courtyard
 - Built-in HD texture pack (can be switched off)
 - Gamepads and keyboard, remappable; button prompts match your Xbox, PlayStation or Nintendo controller
+  and follow remapped face buttons
 - Optional original Xbox controls: X head smash, B dig / talk and back in menus, LB soap bubble, RB sneak (together with
   the triggers, as on the Xbox); the button prompts and tutorial hints follow (launcher **Controls** page or **F10** >
   Controller). The launcher detects an Xbox controller and asks once which layout to use

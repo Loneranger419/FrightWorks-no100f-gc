@@ -1,11 +1,15 @@
-"""Builds the per-controller button prompt textures (Play/UserData/button_icons/<xbox|playstation|nintendo>[_original]).
+"""Builds the per-controller button prompt icons (Play/UserData/button_icons).
 
-The game's GameCube button picture (one atlas: Y, X, A, B) is redrawn with the matching buttons from Kenney's Input
-Prompts (CC0, tools/button-art), each in its own spot so the game's texture coordinates still pick the right one, and
-saved at the HD pack's size under the game texture's name. Aurora loads the set for the controller in use
-(texture_replacement.cpp, hle/input/pad.cpp). GameCube buttons map by position: A south, B east, X west, Y north.
-The *_original sets swap B and X, for the original Xbox controls in gameplay (hle/no100f_xbox_layout.h). Every icon is
-drawn at the size of the biggest button (A), centred where the GameCube button is; the GameCube B button is smaller.
+The game draws its button prompts from one GameCube button picture (an atlas: Y, X, A, B). The game puts the atlas
+together at run time (aurora texture_replacement.cpp) from these files, so the prompts can follow the player's button
+mapping (hle/input/pad.cpp):
+    button_icons/layout.txt                 the atlas's file name and size, the icon size, and where each GameCube
+                                            button's icon goes (top-left corner)
+    button_icons/<family>/<button>.png      one icon per pad button, named like the [controller] mapping
+                                            (south, east, west, north), for xbox, playstation and nintendo
+Icons come from Kenney's Input Prompts (CC0, tools/button-art). Every icon is drawn at the size of the biggest
+GameCube button (A), centred where that button is and kept inside its quarter of the atlas; the GameCube B button is
+smaller. The atlas is the HD pack's size.
 
     python tools/make-button-icons.py [--out Play/UserData/button_icons]
 Needs ImageMagick (magick) to render the SVGs, and the HD pack in texture_pack/ScoobyHD for the layout.
@@ -20,13 +24,14 @@ from PIL import Image, ImageDraw
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ART = os.path.join(ROOT, "tools", "button-art")
 ATLAS = "tex1_64x64_f05a599cb8feb028_14.png"
-STYLES = {
-    "xbox": {"A": "xbox_button_color_a", "B": "xbox_button_color_b", "X": "xbox_button_color_x", "Y": "xbox_button_color_y"},
-    "playstation": {"A": "playstation_button_color_cross", "B": "playstation_button_color_circle",
-                    "X": "playstation_button_color_square", "Y": "playstation_button_color_triangle"},
-    "nintendo": {"A": "switch_button_b", "B": "switch_button_a", "X": "switch_button_y", "Y": "switch_button_x"},
+# Pad buttons by position (SDL / controller_button_names.h names) -> art.
+FAMILIES = {
+    "xbox": {"south": "xbox_button_color_a", "east": "xbox_button_color_b", "west": "xbox_button_color_x",
+             "north": "xbox_button_color_y"},
+    "playstation": {"south": "playstation_button_color_cross", "east": "playstation_button_color_circle",
+                    "west": "playstation_button_color_square", "north": "playstation_button_color_triangle"},
+    "nintendo": {"south": "switch_button_b", "east": "switch_button_a", "west": "switch_button_y", "north": "switch_button_x"},
 }
-STYLES.update({f"{style}_original": dict(buttons, B=buttons["X"], X=buttons["B"]) for style, buttons in list(STYLES.items())})
 
 
 def regions(img):
@@ -62,20 +67,25 @@ def main():
     base = Image.open(os.path.join(ROOT, "texture_pack", "ScoobyHD", ATLAS)).convert("RGBA")
     boxes = regions(base)
     size = max(min(x1 - x0, y1 - y0) for x0, y0, x1, y1 in boxes.values())
+    os.makedirs(a.out, exist_ok=True)
+    lines = [f"atlas {ATLAS} {base.width} {base.height}", f"icon {size}"]
+    for name, (x0, y0, x1, y1) in boxes.items():
+        # Centred on the GameCube button, but kept inside its quarter of the atlas.
+        qx, qy = x0 // (base.width // 2) * (base.width // 2), y0 // (base.height // 2) * (base.height // 2)
+        left = min(max((x0 + x1 - size) // 2, qx), qx + base.width // 2 - size)
+        top = min(max((y0 + y1 - size) // 2, qy), qy + base.height // 2 - size)
+        lines.append(f"{name} {left} {top}")
+    with open(os.path.join(a.out, "layout.txt"), "w", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+    print("wrote", os.path.join(a.out, "layout.txt"))
     with tempfile.TemporaryDirectory() as tmp:
-        for style, buttons in STYLES.items():
-            family = style.split("_")[0]
-            atlas = Image.new("RGBA", base.size, (0, 0, 0, 0))
-            for name, (x0, y0, x1, y1) in boxes.items():
-                icon = render_svg(os.path.join(ART, family, buttons[name] + ".svg"), size, tmp, family == "nintendo")
-                # Centred on the GameCube button, but kept inside its quarter of the atlas.
-                qx, qy = x0 // (base.width // 2) * (base.width // 2), y0 // (base.height // 2) * (base.height // 2)
-                left = min(max((x0 + x1 - icon.width) // 2, qx), qx + base.width // 2 - icon.width)
-                top = min(max((y0 + y1 - icon.height) // 2, qy), qy + base.height // 2 - icon.height)
-                atlas.alpha_composite(icon, (left, top))
-            os.makedirs(os.path.join(a.out, style), exist_ok=True)
-            atlas.save(os.path.join(a.out, style, ATLAS))
-            print("wrote", os.path.join(a.out, style, ATLAS))
+        for family, buttons in FAMILIES.items():
+            os.makedirs(os.path.join(a.out, family), exist_ok=True)
+            for button, art in buttons.items():
+                icon = render_svg(os.path.join(ART, family, art + ".svg"), size, tmp, family == "nintendo")
+                assert icon.size == (size, size), (art, icon.size)
+                icon.save(os.path.join(a.out, family, button + ".png"))
+            print("wrote", os.path.join(a.out, family), ", ".join(buttons))
 
 
 if __name__ == "__main__":

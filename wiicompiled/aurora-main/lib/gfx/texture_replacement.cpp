@@ -18,10 +18,12 @@
 #include <charconv>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <list>
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <sstream>
 #include <string_view>
 
 #include "png_io.hpp"
@@ -68,16 +70,29 @@ struct CachedReplacement {
 
 struct ReplacementIndexEntry {
   std::filesystem::path path;
+  bool buttonIcons = false;  // the button prompt atlas, put together from button_icons (compose_button_icons)
 };
 
 absl::flat_hash_map<RuntimeTextureKey, ReplacementIndexEntry> s_replacementIndex;
-// <UserData>/button_icons/<style>: button prompts for the controller in use, looked up before everything else.
-constexpr const char* kButtonIconStyles[] = {"xbox", "playstation", "nintendo",
-                                             "xbox_original", "playstation_original", "nintendo_original"};
-std::array<absl::flat_hash_map<RuntimeTextureKey, ReplacementIndexEntry>, std::size(kButtonIconStyles)> s_buttonIconIndex;
-std::atomic<int> s_buttonIconStyle{-1};
-std::atomic<bool> s_buttonIconStyleChanged{false};
-int s_appliedButtonIconStyle = -1;
+// <UserData>/button_icons (tools/make-button-icons.py): the game's button picture, an atlas of the GameCube A, B, X
+// and Y buttons, put together from one icon per pad button of the controller in use, so the prompts follow the
+// player's button mapping. Looked up before everything else.
+constexpr const char* kButtonIconFamilies[] = {"xbox", "playstation", "nintendo"};
+constexpr const char* kButtonIconSlots[] = {"A", "B", "X", "Y"};
+constexpr const char* kButtonIconDefaults[] = {"south", "east", "west", "north"};
+struct ButtonIconLayout {
+  bool valid = false;
+  RuntimeTextureKey atlasKey{};
+  uint32_t width = 0, height = 0;
+  std::array<std::array<uint32_t, 2>, 4> slots{};  // top-left corner of each icon, kButtonIconSlots order
+};
+ButtonIconLayout s_buttonIconLayout;
+std::filesystem::path s_buttonIconRoot;
+const ReplacementIndexEntry s_buttonIconEntry{.buttonIcons = true};
+std::mutex s_buttonIconMutex;
+ButtonIcons s_buttonIcons;          // requested, under s_buttonIconMutex
+bool s_buttonIconsChanged = false;  // under s_buttonIconMutex
+ButtonIcons s_appliedButtonIcons;   // renderer thread
 int s_buttonIconForced = -1;
 absl::flat_hash_map<RuntimeTextureKey, CachedReplacement> s_replacementCache;
 absl::flat_hash_set<RuntimeTextureKey> s_failedKeys;
@@ -408,7 +423,51 @@ constexpr bool isUnsupportedTextureFormat(const ConvertedTexture& texture) {
   }
 }
 
+// The prompt atlas for s_appliedButtonIcons: each GameCube button's spot gets the icon of the pad button it is mapped
+// to, or its usual one when the family has no icon for that pad button.
+static std::optional<ConvertedTexture> compose_button_icons() noexcept {
+  const auto& layout = s_buttonIconLayout;
+  const auto& icons = s_appliedButtonIcons;
+  if (!layout.valid || icons.family < 0 || icons.family >= static_cast<int>(std::size(kButtonIconFamilies))) {
+    return std::nullopt;
+  }
+  const auto dir = s_buttonIconRoot / kButtonIconFamilies[icons.family];
+  ByteBuffer data{static_cast<size_t>(layout.width) * layout.height * 4};  // zeroed: transparent
+  for (size_t slot = 0; slot < std::size(kButtonIconSlots); ++slot) {
+    std::optional<ConvertedTexture> icon;
+    for (const std::string_view name : {std::string_view(icons.buttons[slot]), std::string_view(kButtonIconDefaults[slot])}) {
+      const bool plain = !name.empty() && std::all_of(name.begin(), name.end(), [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+      });
+      std::error_code ec;
+      const auto path = dir / fmt::format("{}.png", name);
+      if (plain && std::filesystem::is_regular_file(path, ec) && (icon = png::load_png_file(path))) break;
+    }
+    if (!icon || icon->format != wgpu::TextureFormat::RGBA8Unorm ||
+        icon->data.size() < static_cast<size_t>(icon->width) * icon->height * 4) {
+      Log.warn("Button icons: no {} icon for the {} button in {}", kButtonIconFamilies[icons.family],
+               kButtonIconSlots[slot], fs_path_to_string(dir));
+      continue;
+    }
+    const auto [x0, y0] = layout.slots[slot];
+    if (x0 >= layout.width || y0 >= layout.height) continue;
+    const uint32_t columns = std::min(icon->width, layout.width - x0);
+    for (uint32_t y = 0; y < icon->height && y0 + y < layout.height; ++y) {
+      std::memcpy(data.data() + (static_cast<size_t>(y0 + y) * layout.width + x0) * 4,
+                  icon->data.data() + static_cast<size_t>(y) * icon->width * 4, static_cast<size_t>(columns) * 4);
+    }
+  }
+  return ConvertedTexture{
+      .format = wgpu::TextureFormat::RGBA8Unorm,
+      .width = layout.width,
+      .height = layout.height,
+      .mips = 1,
+      .data = std::move(data),
+  };
+}
+
 std::optional<ConvertedTexture> load_replacement(const ReplacementIndexEntry& entry) noexcept {
+  if (entry.buttonIcons) return compose_button_icons();
   auto base = load_texture_file(entry.path);
   if (!base.has_value()) {
     Log.warn("texture_replacement: failed to load texture {}", fs_path_to_string(entry.path));
@@ -513,21 +572,43 @@ void evict_replacement_cache_if_needed() noexcept {
 }
 
 // Button prompts follow the controller whether or not texture replacements (the HD pack) are on.
+// button_icons/layout.txt: "atlas <file name> <width> <height>", "icon <size>", then "<A|B|X|Y> <left> <top>".
 static void index_button_icons(const std::filesystem::path& userPath) noexcept {
-  std::error_code ec;
-  for (size_t style = 0; style < s_buttonIconIndex.size(); ++style) {
-    for (const auto& entry : std::filesystem::directory_iterator(userPath / "button_icons" / kButtonIconStyles[style], ec)) {
-      if (const auto parsed = parse_replacement_filename(fs_path_to_string(entry.path().filename())); parsed.has_value())
-        s_buttonIconIndex[style].try_emplace(*parsed, ReplacementIndexEntry{entry.path()});
+  s_buttonIconLayout = {};
+  s_buttonIconRoot = userPath / "button_icons";
+  std::ifstream file(s_buttonIconRoot / "layout.txt");
+  ButtonIconLayout layout;
+  bool atlas = false;
+  std::array<bool, 4> placed{};
+  std::string line;
+  while (std::getline(file, line)) {
+    std::istringstream in(line);
+    std::string what;
+    in >> what;
+    if (what == "atlas") {
+      std::string name;
+      in >> name >> layout.width >> layout.height;
+      const auto parsed = parse_replacement_filename(name);
+      atlas = !in.fail() && parsed.has_value() && layout.width > 0 && layout.height > 0 && layout.width <= 4096 &&
+              layout.height <= 4096;
+      if (parsed.has_value()) layout.atlasKey = *parsed;
     }
-    ec.clear();
-    Log.info("Button icons '{}': {} textures", kButtonIconStyles[style], s_buttonIconIndex[style].size());
+    for (size_t slot = 0; slot < std::size(kButtonIconSlots); ++slot) {
+      if (what != kButtonIconSlots[slot]) continue;
+      in >> layout.slots[slot][0] >> layout.slots[slot][1];
+      placed[slot] = !in.fail();
+    }
   }
+  layout.valid = atlas && std::all_of(placed.begin(), placed.end(), [](bool p) { return p; });
+  if (layout.valid) s_buttonIconLayout = layout;
+  Log.info("Button icons: {}", layout.valid ? fmt::format("{}x{} atlas from {}", layout.width, layout.height,
+                                                          fs_path_to_string(s_buttonIconRoot))
+                                            : std::string("none (no valid button_icons/layout.txt)"));
   // BUTTON_ICONS=xbox|playstation|nintendo pins a family (tests: scripted input never reaches the gamepad code).
   if (const char* forced = std::getenv("BUTTON_ICONS")) {
-    for (size_t style = 0; style < s_buttonIconIndex.size(); ++style)
-      if (std::string_view(forced) == kButtonIconStyles[style]) s_buttonIconForced = static_cast<int>(style);
-    set_button_icon_style(s_buttonIconForced);
+    for (size_t family = 0; family < std::size(kButtonIconFamilies); ++family)
+      if (std::string_view(forced) == kButtonIconFamilies[family]) s_buttonIconForced = static_cast<int>(family);
+    set_button_icons({});
   }
 }
 
@@ -606,9 +687,8 @@ void build_index() noexcept {
 }
 
 const ReplacementIndexEntry* find_replacement_path(const RuntimeTextureKey& key) noexcept {
-  if (s_appliedButtonIconStyle >= 0) {
-    const auto& icons = s_buttonIconIndex[s_appliedButtonIconStyle];
-    if (const auto it = icons.find(key); it != icons.end()) return &it->second;
+  if (s_appliedButtonIcons.family >= 0 && s_buttonIconLayout.valid && key == s_buttonIconLayout.atlasKey) {
+    return &s_buttonIconEntry;
   }
   if (!g_config.allowTextureReplacements) return nullptr;
   if (const auto it = s_replacementIndex.find(key); it != s_replacementIndex.end()) {
@@ -847,7 +927,7 @@ void shutdown() noexcept {
     tlut = {};
   }
   s_replacementLru.clear();
-  for (auto& icons : s_buttonIconIndex) icons.clear();
+  s_buttonIconLayout = {};
   s_highlightTexture = {};
   s_replacementCacheBytes = 0;
   s_replacementRoot.clear();
@@ -923,7 +1003,7 @@ void load_tlut(const GXTlutObj* obj, uint32_t idx) noexcept {
 std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
   ZoneScoped;
 
-  if (!g_config.allowTextureReplacements && s_appliedButtonIconStyle < 0) {
+  if (!g_config.allowTextureReplacements && s_appliedButtonIcons.family < 0) {
     return std::nullopt;
   }
 
@@ -955,27 +1035,34 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
   return handle;
 }
 
-void set_button_icon_style(int style) noexcept {
-  if (s_buttonIconForced >= 0) style = s_buttonIconForced % 3 + (style >= 3 ? 3 : 0);
-  if (style < -1 || style >= static_cast<int>(s_buttonIconIndex.size())) style = -1;
-  if (s_buttonIconStyle.exchange(style) != style) s_buttonIconStyleChanged.store(true);
+void set_button_icons(const ButtonIcons& requested) noexcept {
+  ButtonIcons icons = requested;
+  if (s_buttonIconForced >= 0) icons.family = s_buttonIconForced;
+  if (icons.family < -1 || icons.family >= static_cast<int>(std::size(kButtonIconFamilies))) icons.family = -1;
+  if (icons.family < 0) icons.buttons = {};
+  std::lock_guard lock(s_buttonIconMutex);
+  if (!(s_buttonIcons == icons)) {
+    s_buttonIcons = std::move(icons);
+    s_buttonIconsChanged = true;
+  }
 }
 
-int button_icon_style() noexcept { return s_buttonIconStyle.load(); }
-
-// Called on the renderer's thread before textures are resolved: drops the cached icon textures of the old style.
+// Called on the renderer's thread before textures are resolved: drops the cached atlas of the old icons.
 bool take_button_icon_style_change() noexcept {
-  if (!s_buttonIconStyleChanged.exchange(false)) return false;
-  s_appliedButtonIconStyle = s_buttonIconStyle.load();
-  for (const auto& icons : s_buttonIconIndex) {
-    for (const auto& [key, _] : icons) {
-      if (const auto it = s_replacementCache.find(key); it != s_replacementCache.end()) {
-        s_replacementLru.erase(it->second.lruIt);
-        s_replacementCacheBytes -= it->second.bytes;
-        s_replacementCache.erase(it);
-      }
-      s_failedKeys.erase(key);
+  {
+    std::lock_guard lock(s_buttonIconMutex);
+    if (!s_buttonIconsChanged) return false;
+    s_buttonIconsChanged = false;
+    s_appliedButtonIcons = s_buttonIcons;
+  }
+  if (s_buttonIconLayout.valid) {
+    const auto& key = s_buttonIconLayout.atlasKey;
+    if (const auto it = s_replacementCache.find(key); it != s_replacementCache.end()) {
+      s_replacementLru.erase(it->second.lruIt);
+      s_replacementCacheBytes -= std::min(s_replacementCacheBytes, it->second.bytes);
+      s_replacementCache.erase(it);
     }
+    s_failedKeys.erase(key);
   }
   return true;
 }

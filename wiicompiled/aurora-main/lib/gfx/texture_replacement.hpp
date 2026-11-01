@@ -1,7 +1,9 @@
 #pragma once
 
 #include "texture.hpp"
+#include <array>
 #include <optional>
+#include <string>
 
 namespace aurora::gfx::texture_replacement {
 void initialize() noexcept;
@@ -25,9 +27,15 @@ bool is_highlight_handle(const TextureHandle& handle) noexcept;
 void set_texture_log_scene(std::string_view scene) noexcept;
 std::string texture_log_scene() noexcept;
 uint32_t texture_log_generation() noexcept;
-// Button prompt set for the controller in use (0 xbox, 1 playstation, 2 nintendo, -1 the game's own GameCube icons).
-// take_button_icon_style_change returns true once after it changed, so cached textures can be re-resolved.
-void set_button_icon_style(int style) noexcept;
+// Button prompts for the controller in use: `family` 0 xbox, 1 playstation, 2 nintendo, -1 the game's own GameCube
+// icons; `buttons` = the pad button (controller_button_names.h config name) drawn for the GameCube A, B, X and Y
+// buttons, "" = that button's usual one. take_button_icon_style_change returns true once after a change, so cached
+// textures can be re-resolved (renderer thread).
+struct ButtonIcons {
+  int family = -1;
+  std::array<std::string, 4> buttons;
+  bool operator==(const ButtonIcons&) const = default;
+};
+void set_button_icons(const ButtonIcons& icons) noexcept;
 bool take_button_icon_style_change() noexcept;
-int button_icon_style() noexcept;
 } // namespace aurora::gfx::texture_replacement
