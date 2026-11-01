@@ -451,7 +451,7 @@ index a796d2e..19dfe36 100644
  add_executable(mkw_input_expr_tests
 diff --git a/wiicompiled/runtime/include/no100f_devmenu.h b/wiicompiled/runtime/include/no100f_devmenu.h
 new file mode 100644
-index 0000000..6070339
+index 0000000..217da0b
 --- /dev/null
 +++ b/wiicompiled/runtime/include/no100f_devmenu.h
 @@ -0,0 +1,22 @@
@@ -474,23 +474,33 @@ index 0000000..6070339
 +bool BlocksInput() noexcept;
 +// Free camera: called from the RwCameraBeginUpdate override with the camera about to render.
 +void ApplyFreecam(uint32_t camera, CpuContext* ctx);
-+// Pad 1 buttons (PAD_BUTTON_*) held by the "devmenu_press.txt" file command, ORed in by PADRead.
++// Pad 1 buttons (PAD_BUTTON_*) held by the "devmenu_press.txt" file command or the Skip button, ORed in by PADRead.
 +uint16_t PressedButtons() noexcept;
 +} // namespace no100f_devmenu
 diff --git a/wiicompiled/runtime/include/no100f_devmenu_state.h b/wiicompiled/runtime/include/no100f_devmenu_state.h
 new file mode 100644
-index 0000000..2ed6ff3
+index 0000000..5b82d7c
 --- /dev/null
 +++ b/wiicompiled/runtime/include/no100f_devmenu_state.h
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,99 @@
 +#pragma once
 +
 +// Dev-menu logic that needs no SDL, ImGui or guest memory, so it can be unit tested.
 +
++#include <cstdint>
 +#include <cctype>
 +#include <string_view>
 +
 +namespace no100f_devmenu {
++
++// Which button skips what is playing: A for a recorded cutscene, Start for the title intro / attract demo (mode 2).
++enum class SkipControl { None, Confirm, Start };
++
++inline SkipControl SkipControlFor(uint32_t mode, uint32_t state, bool recordedCutscene) {
++    if (recordedCutscene) return SkipControl::Confirm;
++    if (mode == 2 && (state == 0 || state == 1)) return SkipControl::Start;
++    return SkipControl::None;
++}
 +
 +// devmenu_textures.txt: the seventh column marks Effects-tab entries. Accept any case, leading spaces and suffixes
 +// ("effect", " EFFECT\r", "effect:particle").
@@ -503,6 +513,73 @@ index 0000000..2ed6ff3
 +        if (std::tolower(static_cast<unsigned char>(category[i])) != prefix[i]) return false;
 +    return true;
 +}
++
++// One queued scene change: waits until the game is in play with no cutscene and no portal pending, submits once,
++// then reports arrival; gives up after 60 s.
++class SceneRequest {
++public:
++    enum class Action { Wait, Submit, Arrived, Timeout };
++
++    bool Begin(uint32_t destination, uint64_t now) {
++        if (destination == 0 || destination_ != 0) return false;
++        destination_ = destination;
++        deadline_ = now + 60000;
++        submitted_ = false;
++        return true;
++    }
++
++    Action Update(uint32_t current, bool ready, bool cinematic, bool portalPending, uint64_t now) {
++        if (!Active()) return Action::Wait;
++        if (now >= deadline_) {
++            Cancel();
++            return Action::Timeout;
++        }
++        if (!ready) return Action::Wait;
++        if (current == destination_ && (submitted_ || !cinematic)) {
++            Cancel();
++            return Action::Arrived;
++        }
++        if (!submitted_ && !cinematic && !portalPending) {
++            submitted_ = true;
++            return Action::Submit;
++        }
++        return Action::Wait;
++    }
++
++    bool Active() const { return destination_ != 0; }
++    bool Submitted() const { return Active() && submitted_; }
++    void Cancel() { destination_ = 0; }
++
++private:
++    uint32_t destination_ = 0;
++    uint64_t deadline_ = 0;
++    bool submitted_ = false;
++};
++
++// Skip button: press for 100 ms every 500 ms while the same sequence plays, for up to 10 s.
++class SkipRequest {
++public:
++    void Begin(uint64_t now) {
++        started_ = now;
++        active_ = true;
++    }
++
++    bool Press(uint64_t now, bool cinematic) {
++        if (!active_) return false;
++        if (!cinematic || now - started_ >= 10000) {
++            active_ = false;
++            return false;
++        }
++        // Fresh presses survive the movie's initial unskippable interval.
++        return (now - started_) % 500 < 100;
++    }
++
++    bool Active() const { return active_; }
++
++private:
++    uint64_t started_ = 0;
++    bool active_ = false;
++};
 +
 +} // namespace no100f_devmenu
 diff --git a/wiicompiled/runtime/src/hle/input/pad.cpp b/wiicompiled/runtime/src/hle/input/pad.cpp
@@ -530,10 +607,10 @@ index c8ac957..b9f1b8c 100644
          statuses[0].button |= scripted;
 diff --git a/wiicompiled/runtime/src/no100f_devmenu.cpp b/wiicompiled/runtime/src/no100f_devmenu.cpp
 new file mode 100644
-index 0000000..4de8434
+index 0000000..35d356e
 --- /dev/null
 +++ b/wiicompiled/runtime/src/no100f_devmenu.cpp
-@@ -0,0 +1,1540 @@
+@@ -0,0 +1,1652 @@
 +// DEBUG dev menu (F8) for Scooby-Doo! Night of 100 Frights: teleport to any scene, save spots and go back to them,
 +// god mode, monsters off.
 +//
@@ -649,6 +726,12 @@ index 0000000..4de8434
 +bool g_pendingSpot = false;
 +Spot g_pending;
 +int g_pendingSettle = 0, g_pendingAge = 0;
++SceneRequest g_sceneRequest;  // queued scene change (scene list, spots in another scene)
++SkipRequest g_skipRequest;    // "Skip" button / skip command
++bool g_skipPressed = false;
++uint32_t g_skipMode = 0, g_skipState = 0, g_skipManager = 0;  // the sequence the skip was asked for
++uint16_t g_skipButtons = 0;
++bool IsPlayable(uint32_t id);
 +
 +bool g_god = false;
 +uint32_t g_takeDamageSaved = 1;
@@ -786,6 +869,30 @@ index 0000000..4de8434
 +}
 +bool CutscenePlaying() { return Read32Or0(kCutsceneMgr) != 0; }
 +bool InPlay() { return Read32Or0(kGameMode) == 0xB && Read32Or0(kGameState) == 1 && CurrentScenePtr(); }
++bool SkippableSequence() {
++    return SkipControlFor(Read32Or0(kGameMode), Read32Or0(kGameState), CutscenePlaying()) != SkipControl::None;
++}
++
++bool SameSkipSequence() {
++    return SkippableSequence() && Read32Or0(kGameMode) == g_skipMode &&
++           Read32Or0(kGameState) == g_skipState && Read32Or0(kCutsceneMgr) == g_skipManager;
++}
++
++// Presses the game's own skip button (A in a recorded cutscene, Start on the title intro / attract demo) until the
++// game takes it or the sequence ends.
++void RequestSkip() {
++    if (!SkippableSequence()) {
++        g_status = "No recorded cutscene or title/demo sequence is playing.";
++        return;
++    }
++    g_skipRequest.Begin(SDL_GetTicks());
++    g_skipMode = Read32Or0(kGameMode);
++    g_skipState = Read32Or0(kGameState);
++    g_skipManager = Read32Or0(kCutsceneMgr);
++    g_skipButtons = SkipControlFor(g_skipMode, g_skipState, g_skipManager != 0) == SkipControl::Start
++                        ? PAD_BUTTON_START : PAD_BUTTON_A;
++    g_status = "Requesting the game's normal skip; waiting for the skippable interval.";
++}
 +
 +bool ReadPlayer(Spot& s) {
 +    const uint32_t mat = Read32Or0(kPlayerFramePtr);
@@ -879,14 +986,15 @@ index 0000000..4de8434
 +    return IsGuestPtr(frame) ? frame : 0;
 +}
 +
-+// Start the free camera where the game camera is.
++// Start the free camera where the game camera is. Read the modelling matrix (what the game camera writes), not the
++// LTM: right after the hub intro ends on its own the LTM is identity for a few seconds (free camera at the origin).
 +bool ReadMainCamera(FreeCam& c) {
 +    const uint32_t frame = MainCameraFrame();
 +    if (!frame) return false;
-+    const float ax = ReadF(frame + 0x70), ay = ReadF(frame + 0x74), az = ReadF(frame + 0x78);
-+    c.x = ReadF(frame + 0x80);
-+    c.y = ReadF(frame + 0x84);
-+    c.z = ReadF(frame + 0x88);
++    const float ax = ReadF(frame + 0x30), ay = ReadF(frame + 0x34), az = ReadF(frame + 0x38);
++    c.x = ReadF(frame + 0x40);
++    c.y = ReadF(frame + 0x44);
++    c.z = ReadF(frame + 0x48);
 +    c.yaw = std::atan2(ax, az);
 +    c.pitch = std::asin(std::clamp(-ay, -1.0f, 1.0f));
 +    return true;
@@ -970,8 +1078,12 @@ index 0000000..4de8434
 +}
 +
 +void GoToSpot(const Spot& s) {
-+    if (!InPlay()) {
-+        g_status = "Not in play (wait for the level to finish loading, close the pause menu).";
++    if (g_sceneRequest.Active() || g_pendingSpot) {
++        g_status = "A level/spot transfer is already pending. Wait for it or cancel it first.";
++        return;
++    }
++    if (!InPlay() || CutscenePlaying() || !Read32Or0(kPlayerControl)) {
++        g_status = "Close the pause menu and skip or finish the cutscene before teleporting to a spot.";
 +        return;
 +    }
 +    if (s.scene == CurrentSceneId()) {
@@ -979,8 +1091,9 @@ index 0000000..4de8434
 +        ApplySpotCam(s);
 +        return;
 +    }
-+    if (!SwitchScene(s.scene, s.yaw)) {
-+        g_status = "Scene switch refused (a portal is already pending?).";
++    LoadLevels();
++    if (!IsPlayable(s.scene) || !g_sceneRequest.Begin(s.scene, SDL_GetTicks())) {
++        g_status = "The spot's destination is not a playable level.";
 +        return;
 +    }
 +    g_pending = s;
@@ -990,23 +1103,60 @@ index 0000000..4de8434
 +}
 +
 +void GoToScene(uint32_t id) {
-+    g_pendingSpot = false;
++    LoadLevels();
++    if (g_sceneRequest.Active() || g_pendingSpot) {
++        g_status = "A level/spot transfer is already pending. Wait for it or cancel it first.";
++        return;
++    }
++    if (!IsPlayable(id)) {
++        g_status = "Unknown level ID.";
++        return;
++    }
++    if (!IsPlayable(CurrentSceneId())) {
++        g_status = "Start or load a game first. Debug travel cannot initialize a game from the title/demo screen.";
++        return;
++    }
 +    if (id == CurrentSceneId()) {
 +        g_status = "Already in " + Lower(IdString(id)) + ".";
 +        return;
 +    }
-+    g_status = SwitchScene(id, 0.0f) ? "Loading " + Lower(IdString(id)) + "..."
-+                                     : "Not in play (wait for the level to load, close the pause menu).";
++    g_pending = {};
++    g_pending.scene = id;
++    g_sceneRequest.Begin(id, SDL_GetTicks());
++    g_status = "Queued " + Lower(IdString(id)) + ". Close the pause menu or skip/finish the cutscene to travel.";
 +}
 +
 +void UpdatePending() {
++    if (g_sceneRequest.Active()) {
++        const uint32_t scene = CurrentScenePtr();
++        const auto action = g_sceneRequest.Update(CurrentSceneId(), InPlay(),
++                                                 CutscenePlaying() || !Read32Or0(kPlayerControl),
++                                                 scene && Read32Or0(scene + 0x70), SDL_GetTicks());
++        if (action == SceneRequest::Action::Submit) {
++            SetFreecam(false);
++            if (!SwitchScene(g_pending.scene, g_pending.yaw)) {
++                g_sceneRequest.Cancel();
++                g_pendingSpot = false;
++                g_status = "Level switch refused: the game is not ready or another portal is pending.";
++            } else {
++                g_status = "Loading " + Lower(IdString(g_pending.scene)) + "...";
++            }
++        } else if (action == SceneRequest::Action::Timeout) {
++            g_pendingSpot = false;
++            g_status = "Level travel timed out. Close the pause menu or finish the cutscene, then retry.";
++        } else if (action == SceneRequest::Action::Arrived) {
++            g_status = "Loaded " + Lower(IdString(g_pending.scene)) + ".";
++            g_pendingAge = g_pendingSettle = 0;
++        }
++        if (g_sceneRequest.Active()) return;
++    }
 +    if (!g_pendingSpot) return;
 +    if (++g_pendingAge > kPendingTimeoutFrames) {
 +        g_pendingSpot = false;
 +        g_status = "Gave up waiting for " + Lower(IdString(g_pending.scene)) + ".";
 +        return;
 +    }
-+    if (!InPlay() || CurrentSceneId() != g_pending.scene) {
++    if (!InPlay() || CutscenePlaying() || !Read32Or0(kPlayerControl) || CurrentSceneId() != g_pending.scene) {
 +        g_pendingSettle = 0;
 +        return;
 +    }
@@ -1336,8 +1486,11 @@ index 0000000..4de8434
 +    return any;
 +}
 +
-+// devmenu.txt (cwd = Play), read every 30 frames while in play and then deleted; results go to devmenu.log.
-+//   scene ID            go to scene ID (start position)
++// devmenu.txt (cwd = Play), read every 30 frames and then deleted; results go to devmenu.log. The file waits (is
++// left alone) until the game is in play with no scene/spot transfer pending, unless every line is "skip" or, with no
++// transfer pending, "scene".
++//   scene ID            go to scene ID (start position; queued until the game is in play with no cutscene)
++//   skip                skip the recorded cutscene / title intro / attract demo with the game's own button
 +//   spot NAME           go to a saved spot
 +//   save NAME           save the current spot
 +//   tp X Y Z [YAWDEG]   teleport in this scene
@@ -1357,12 +1510,21 @@ index 0000000..4de8434
 +//   perf                draw calls of the last frame + present timing (fps, average/p95 frame time)
 +void PollCommandFile() {
 +    static uint32_t tick = 0;
-+    if (++tick % 30 != 0 || !InPlay() || g_pendingSpot) return;
++    if (++tick % 30 != 0) return;
 +    std::ifstream in("devmenu.txt");
 +    if (!in) return;
 +    std::vector<std::string> lines;
 +    for (std::string l; std::getline(in, l);) lines.push_back(l);
 +    in.close();
++    const bool busy = g_pendingSpot || g_sceneRequest.Active();
++    if (!InPlay() || busy) {
++        for (const std::string& l : lines) {
++            std::istringstream ss(l);
++            std::string cmd;
++            if (!(ss >> cmd)) continue;
++            if (cmd != "skip" && !(cmd == "scene" && !busy)) return;  // wait for play
++        }
++    }
 +    std::remove("devmenu.txt");
 +    std::ofstream log("devmenu.log", std::ios::app);
 +    for (const std::string& l : lines) {
@@ -1371,7 +1533,9 @@ index 0000000..4de8434
 +        ss >> cmd;
 +        std::getline(ss >> std::ws, arg);
 +        g_status.clear();
-+        if (cmd == "scene") {
++        if (cmd == "skip") {
++            RequestSkip();
++        } else if (cmd == "scene") {
 +            GoToScene(IdFromString(arg));
 +        } else if (cmd == "spot") {
 +            LoadSpots();
@@ -1513,11 +1677,29 @@ index 0000000..4de8434
 +
 +void DrawStatus() {
 +    const uint32_t id = CurrentSceneId();
-+    ImGui::Text("Scene: %s", id ? SceneName(id).c_str() : "-");
++    ImGui::Text("Level: %s", id ? SceneName(id).c_str() : "-");
 +    Spot here;
 +    if (ReadPlayer(here))
 +        ImGui::Text("Scooby: %.2f %.2f %.2f  yaw %.1f deg", here.x, here.y, here.z, here.yaw * 180.0f / 3.14159265f);
 +    ImGui::Text("Game mode %X state %u%s", Read32Or0(kGameMode), Read32Or0(kGameState), InPlay() ? " (in play)" : "");
++    ImGui::BeginDisabled(!SkippableSequence());
++    const char* skipLabel = CutscenePlaying() ? "Skip cutscene (A)"
++                            : Read32Or0(kGameState) == 1 ? "Exit attract demo (Start)"
++                                                         : "Skip title intro (Start)";
++    if (ImGui::Button(skipLabel)) RequestSkip();
++    ImGui::EndDisabled();
++    if (g_skipRequest.Active()) ImGui::TextDisabled("Waiting for the game's skip window...");
++    if (g_sceneRequest.Active() || g_pendingSpot) {
++        ImGui::SameLine();
++        ImGui::BeginDisabled(g_sceneRequest.Submitted());
++        if (ImGui::Button("Cancel travel")) {
++            g_sceneRequest.Cancel();
++            g_pendingSpot = false;
++            g_status = "Pending debug travel canceled.";
++        }
++        ImGui::EndDisabled();
++        if (g_sceneRequest.Submitted()) ImGui::TextDisabled("A load already started; let it finish normally.");
++    }
 +    bool god = g_god;
 +    if (ImGui::Checkbox("God mode (no damage, green Scooby)", &god)) SetGod(god);
 +    bool cam = g_cam.on;
@@ -1552,7 +1734,7 @@ index 0000000..4de8434
 +            g_status = "Player not found.";
 +        }
 +    }
-+    ImGui::Checkbox("This scene only", &g_thisSceneOnly);
++    ImGui::Checkbox("This level only", &g_thisSceneOnly);
 +    const uint32_t cur = CurrentSceneId();
 +    int erase = -1;
 +    if (ImGui::BeginTable("spots", 4, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
@@ -1581,7 +1763,8 @@ index 0000000..4de8434
 +
 +void DrawScenes() {
 +    LoadLevels();
-+    ImGui::TextDisabled("Spawns at the scene's start position.");
++    ImGui::TextDisabled("Spawns at the level's start position.");
++    ImGui::TextWrapped("One transfer at a time. Paused/cutscene requests wait for normal play; travel turns free camera off.");
 +    const uint32_t cur = CurrentSceneId();
 +    for (const Level& level : g_levels) {
 +        if (!ImGui::TreeNode(level.title.c_str())) continue;
@@ -1596,13 +1779,13 @@ index 0000000..4de8434
 +
 +void DrawMonsters() {
 +    bool allOff = g_allMonstersOff;
-+    if (ImGui::Checkbox("All monsters off (every scene)", &allOff)) SetAllMonstersOff(allOff);
-+    ImGui::TextDisabled("Off = frozen and parked off-map. Per-monster switches reset on a scene change.");
++    if (ImGui::Checkbox("All monsters off (every level)", &allOff)) SetAllMonstersOff(allOff);
++    ImGui::TextDisabled("Off = frozen and parked off-map. Per-monster switches reset on a level change.");
 +    if (!InPlay()) {
 +        ImGui::TextDisabled("Not in play.");
 +        return;
 +    }
-+    if (g_monsters.empty()) ImGui::TextDisabled("No monsters in this scene.");
++    if (g_monsters.empty()) ImGui::TextDisabled("No monsters in this level.");
 +    ImGui::BeginDisabled(g_allMonstersOff);
 +    if (ImGui::BeginTable("monsters", 2, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) {
 +        for (size_t i = 0; i < g_monsters.size(); ++i) {
@@ -1759,7 +1942,7 @@ index 0000000..4de8434
 +        ImGui::TextWrapped("No list loaded: put devmenu_textures.txt in UserData (e.g. from autotest\\texhunt), then Reload. Effects entries have 'effect' in the seventh column.");
 +        return;
 +    }
-+    ImGui::Checkbox("This scene only", &thisScene);
++    ImGui::Checkbox("This level only", &thisScene);
 +    ImGui::SameLine();
 +    ImGui::Checkbox("Hide fine/fixed", &hideFine);
 +    ImGui::SameLine();
@@ -1779,7 +1962,7 @@ index 0000000..4de8434
 +        return s.effect == effects && (!thisScene || isHere(s)) && !(hideFine && isFine(s) && !g_markedOpen.count(s.id));
 +    };
 +    if (std::none_of(g_suspects.begin(), g_suspects.end(), shown)) {
-+        ImGui::TextWrapped("Nothing to show: untick 'This scene only' or 'Hide fine/fixed'.");
++        ImGui::TextWrapped("Nothing to show: untick 'This level only' or 'Hide fine/fixed'.");
 +        return;
 +    }
 +    std::string lastLevel;
@@ -1970,7 +2153,8 @@ index 0000000..4de8434
 +}
 +
 +uint16_t PressedButtons() noexcept {
-+    return g_presses.empty() || g_pressFrames == 0 ? 0 : g_presses.front().buttons;
++    const uint16_t scripted = g_presses.empty() || g_pressFrames == 0 ? 0 : g_presses.front().buttons;
++    return scripted | (g_skipPressed && SameSkipSequence() ? g_skipButtons : 0);
 +}
 +
 +bool IsOpen() noexcept { return g_open; }
@@ -2002,6 +2186,11 @@ index 0000000..4de8434
 +void Draw() noexcept {
 +    (void)kReserved;
 +    UpdatePresses();
++    const bool wasSkipping = g_skipRequest.Active();
++    g_skipPressed = g_skipRequest.Press(SDL_GetTicks(), SameSkipSequence());
++    if (wasSkipping && !g_skipRequest.Active())
++        g_status = SameSkipSequence() ? "The game did not accept the skip within 10 seconds; retry when skippable."
++                                      : "The cinematic sequence ended.";
 +    UpdatePending();
 +    UpdateGod();
 +    UpdateMonsters();
@@ -2038,7 +2227,7 @@ index 0000000..4de8434
 +                DrawSpots();
 +                ImGui::EndTabItem();
 +            }
-+            if (ImGui::BeginTabItem("Scenes")) {
++            if (ImGui::BeginTabItem("Levels")) {
 +                DrawScenes();
 +                ImGui::EndTabItem();
 +            }
@@ -2124,19 +2313,60 @@ index 81eb3ac..5b83a1b 100644
      ApplyInputBlockState();
 diff --git a/wiicompiled/runtime/tests/no100f_devmenu_state_tests.cpp b/wiicompiled/runtime/tests/no100f_devmenu_state_tests.cpp
 new file mode 100644
-index 0000000..83abf03
+index 0000000..4bfd1ac
 --- /dev/null
 +++ b/wiicompiled/runtime/tests/no100f_devmenu_state_tests.cpp
-@@ -0,0 +1,12 @@
+@@ -0,0 +1,53 @@
 +#include "no100f_devmenu_state.h"
 +
 +#include <cassert>
 +
 +int main() {
++    using no100f_devmenu::SkipControl;
++    assert(no100f_devmenu::SkipControlFor(2, 0, false) == SkipControl::Start);
++    assert(no100f_devmenu::SkipControlFor(2, 1, false) == SkipControl::Start);
++    assert(no100f_devmenu::SkipControlFor(2, 2, false) == SkipControl::None);
++    assert(no100f_devmenu::SkipControlFor(11, 1, true) == SkipControl::Confirm);
++    assert(no100f_devmenu::SkipControlFor(11, 1, false) == SkipControl::None);
 +    assert(no100f_devmenu::IsEffectEntry("effect"));
 +    assert(no100f_devmenu::IsEffectEntry(" EFFECT\r"));
 +    assert(no100f_devmenu::IsEffectEntry("effect:particle"));
 +    assert(!no100f_devmenu::IsEffectEntry(""));
-+    assert(!no100f_devmenu::IsEffectEntry("eff"));
 +    assert(!no100f_devmenu::IsEffectEntry("texture"));
++    using no100f_devmenu::SceneRequest;
++    using Action = SceneRequest::Action;
++    SceneRequest travel;
++    assert(!travel.Begin(0, 100));
++    assert(travel.Begin(2, 100));
++    assert(!travel.Begin(3, 200));
++    assert(travel.Update(1, false, false, false, 300) == Action::Wait);
++    assert(travel.Update(1, true, true, false, 400) == Action::Wait);
++    assert(travel.Update(1, true, false, true, 500) == Action::Wait);
++    assert(travel.Update(1, true, false, false, 600) == Action::Submit);
++    assert(travel.Submitted());
++    assert(travel.Update(1, true, false, false, 700) == Action::Wait);
++    assert(travel.Update(2, false, false, false, 800) == Action::Wait);
++    assert(travel.Update(2, true, true, false, 900) == Action::Arrived);
++    assert(!travel.Active());
++    assert(!travel.Submitted());
++    assert(travel.Begin(3, 1000));
++    assert(travel.Update(2, false, false, false, 61000) == Action::Timeout);
++    assert(!travel.Active());
++    assert(travel.Begin(3, 62000));
++    travel.Cancel();
++    assert(!travel.Active());
++
++    no100f_devmenu::SkipRequest skip;
++    assert(!skip.Press(0, true));
++    skip.Begin(100);
++    assert(skip.Press(100, true));
++    assert(!skip.Press(200, true));
++    assert(skip.Press(600, true));
++    assert(!skip.Press(601, false));
++    assert(!skip.Active());
++    assert(!skip.Press(700, true));
++    skip.Begin(1000);
++    assert(skip.Press(10499, true) == false);
++    assert(!skip.Press(11000, true));
++    assert(!skip.Active());
 +}
