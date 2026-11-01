@@ -21,12 +21,11 @@ ports of the other console versions may follow.
 - 30 or 60 fps, MSAA anti-aliasing, HDR
 - Restored Creeper window animation in Mystic Manor's Mystery Machine courtyard
 - Built-in HD texture pack (can be switched off)
-- Gamepads and keyboard, remappable; button prompts match your Xbox, PlayStation or Nintendo controller
-  and follow remapped face buttons
+- Gamepads and keyboard, remappable in the launcher (**Settings** > **Controls**) or in game (**F10** > Controls);
+  button prompts match your Xbox, PlayStation or Nintendo controller and follow remapped face buttons
 - Optional original Xbox controls: X head smash, B dig / talk and back in menus, LB soap bubble, RB sneak (together with
-  the triggers, as on the Xbox); the button prompts and tutorial hints follow (launcher **Controls** page or **F10** >
-  Controls, where Black and White can also go on other buttons). The launcher detects an Xbox controller and asks once
-  which layout to use
+  the triggers, as on the Xbox); the button prompts and tutorial hints follow. Black and White can also go on other
+  buttons. The launcher detects an Xbox controller and asks once which layout to use
 - GameCube memory-card saves
 - Option to skip the intro movies; mods that replace game files or textures
 - The game's holiday events follow the real date, or pick a holiday or turn them off on the launcher's **Extras** page
@@ -45,7 +44,8 @@ Requires Windows 10/11 (64-bit) and **Night of 100 Frights, GameCube USA v1.01 (
 1. Unzip the [latest release](https://github.com/Loneranger419/FrightWorks-no100f-gc/releases/latest).
 2. Open `FrightWorks.exe` and press **Play**. The first time, it asks for your disc image (**Extras**).
 
-Settings are in the launcher (**Settings**) and in game (**F10**). **F11** toggles fullscreen, **F2** saves a
+Settings are in the launcher (**Settings**) and in game (**F10**, or the controller's **Back** / **Select** button, as
+long as no mapping uses it). **F11** toggles fullscreen, **F2** saves a
 screenshot to the `Screenshots` folder and **F1** opens this page in your browser. Saves, settings
 and mods live in `data\UserData`; unzip a new release over the old folder to update.
 
