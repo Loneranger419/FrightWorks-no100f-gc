@@ -66,17 +66,16 @@ New pure logic (no SDL, no guest memory) belongs in a header with a test next to
 `tools\debug\manual-session.ps1` opens one game window straight into a level, for looking at a bug and taking
 screenshots.
 
-**It overwrites `Play\UserData\Config.toml`.** Back it up first, and afterwards put it back and delete
-`Play\UserData\mods\zz-manual` (the boot mod it writes). Controller remaps made in F10 during a test are also saved to
-`Play\UserData\<controller name>_<VID>_<PID>.controller`; back that file up too if you change bindings.
+Every test runs with the same settings (windowed 1600x900, 60 fps, MSAA 4, HD pack off unless `-HdTextures`), not
+yours. `start` saves your own settings first (`Play\UserData\Config.toml` and the `*.controller` files where F10
+controller remaps are kept) to `tools\debug\local\user-setup\`, and `stop` puts them back and deletes the
+`Play\UserData\mods\zz-manual` boot mod. If a test didn't finish, the saved copy stays (a new test keeps it rather than
+saving the test settings over it); `restore` puts it back.
 
 ```powershell
-Copy-Item Play\UserData\Config.toml tools\debug\local\Config.user.toml   # once: your own settings
 powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 start -Boot i001 -AllPowerups
 powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 shot -Label curtains   # -> autotest\manual\
-powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop
-Remove-Item -Recurse Play\UserData\mods\zz-manual
-Copy-Item tools\debug\local\Config.user.toml Play\UserData\Config.toml
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop                   # your settings back
 ```
 
 - `-Boot <scene>` picks the level (default `e001`); `-AllPowerups` unlocks every gadget; `-HdTextures` turns the HD pack
@@ -84,8 +83,10 @@ Copy-Item tools\debug\local\Config.user.toml Play\UserData\Config.toml
   or `python tools\debug\game\levels.py i004`. Common ones: `h001` (hub, smoke test), `i001`, `i004` (boot it directly),
   `e001`.
 - `status` shows the running session; `stop-tests` kills leftover automation.
-- Settings not in the generated config: run `start`, then `stop`, add your section to `Config.toml`, and launch the exe
-  yourself (`shot` captures any running game). Example: `tools\debug\holiday-shots.ps1`.
+- Settings not in the generated config, or launching the game yourself (e.g. to capture its stderr): run `prepare`
+  (same options as `start`; saves your settings, writes the config and boot mod, doesn't start the game), add your
+  section to `Config.toml`, launch the exe, and `stop` when done (`shot` captures any running game). Example:
+  `tools\debug\holiday-shots.ps1`. The other scripts in `tools\debug` that start the game do the same.
 - Don't run several game windows or level-sweep automation for visual bugs: one window, looked at by a person.
 
 ## 5. Dev menu (F8)

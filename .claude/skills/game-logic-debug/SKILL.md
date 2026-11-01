@@ -40,18 +40,19 @@ The camera can't be turned, so a fixed spawn gives a fixed view. `mkhip.py` writ
 boot mod that `manual-session start` creates (game data: local only).
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 start -Boot i004 -AllPowerups   # writes zz-manual + Config
-powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 prepare -Boot i004 -AllPowerups   # saves user setup, writes zz-manual + Config
 python tools\debug\game\mkhip.py i004 --spot spot1            # spawn there, all NPCs moved off-map (--npc none keeps them)
 #   or: mkhip.py i004 --pos X Y Z --yaw R
 Start-Process 'Play\FrightWorks Game.exe' -WorkingDirectory Play   # not manual-session start: it rewrites zz-manual
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop   # when done: game closed, user setup back
 ```
 
 - Spots: with `postool.patch` built in, **F9** (global hotkey) appends Scooby's position + yaw to `Play/postool/spots.txt`
   (beeps). Copy good ones to `tools/debug/game/spots.txt` (i004 grate spots are there). F9 saves the feet; mkhip adds 0.3 to Y.
 - NPCs: clearing `baseFlags & 1` does nothing (NPC code ignores it), so mkhip moves them to (2000+50i, -500, 2000).
 - Poking only Scooby's matrix doesn't stick (the frame rebuilds it); the dev menu's teleport (below) does, or use the spawn.
-- Clean up afterwards: delete `Play\UserData\mods\zz-manual`, copy `tools\debug\local\Config.user.toml` back.
+- Clean up afterwards: `manual-session.ps1 stop` (or `restore`) puts the user's Config/controller files back and deletes
+  `Play\UserData\mods\zz-manual`. Don't `stop` between `prepare` and launching: it restores the user's config.
 
 ## Dev menu (`no100f_devmenu.cpp`; `tools/debug/patches/devmenu.patch` for older branches)
 

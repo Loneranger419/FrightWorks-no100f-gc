@@ -14,7 +14,7 @@ Layout (paths in the skills and scripts are written from the repo root):
 | --- | --- |
 | `.claude\skills\` | the Claude Code skills (tracked; the rest of `.claude\` is git-ignored) |
 | `tools\debug\` | these tools |
-| `tools\debug\local\` | git-ignored, machine-local: the user's own game config as `Config.user.toml` (session scripts restore it), Dolphin disc copies, a downloaded ffmpeg |
+| `tools\debug\local\` | git-ignored, machine-local: `user-setup\` (the user's Config.toml + controller files while a test runs; `manual-session.ps1 restore` puts them back), Dolphin disc copies, a downloaded ffmpeg |
 | `autotest\` | git-ignored work data and output: shots (`autotest\manual\`), texture-hunt data (`autotest\texhunt\`), audio dumps, logs |
 
 ## Skills
@@ -31,7 +31,7 @@ Layout (paths in the skills and scripts are written from the repo root):
 | Path | What |
 | --- | --- |
 | `play-patched.ps1` | Apply patches, build, play with the dev menu on (`NO100F_DEV_TOOLS=1`; the default `devmenu` patch only on branches from before it was built in); patches come out of the source when the game closes. `-Patch a,b`, `-HdTextures` (with the HD pack), `-Keep`, `-CleanBuild`, `-Remove` |
-| `manual-session.ps1` | Single-window playtest: `start -Boot <level> [-AllPowerups]` (writes Config + `zz-manual` boot mod), `shot`, `stop`, `stop-tests` |
+| `manual-session.ps1` | Single-window playtest: `start -Boot <level> [-AllPowerups]` (saves the user's settings, writes the test Config + `zz-manual` boot mod), `shot`, `stop` (settings back), `prepare` (like start, no game), `restore`, `stop-tests` |
 | `build-translator.ps1` | Rebuild the translator after switching to/from a branch that changes `wiicompiled\translator` (then build without `-SkipTranslate`) |
 | `dol.py` | `callers` / `func` / `dis` / `name` on `game/main.dol` with MAP names (needs `capstone`) |
 | `overrides.py` | Active native overrides; `--effects`, `--xref` (`__GXData` fields only the replaced original maintained) |
