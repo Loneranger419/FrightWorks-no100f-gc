@@ -1,14 +1,16 @@
 # build-devmenu.ps1 -Branch <branch>: build Play\ from that branch with the dev menu patch, then put the source back
 # (patch removed, the branch that was checked out before). Needs a clean tree apart from untracked files.
-# Used by spots-run.ps1 -Branch; hunt.ps1 -Branch switches branches itself (play-patched builds and applies the patch).
+# Used by spots-run.ps1 -Branch and hunt.ps1 -Branch. Works for branches without the debug kit (patch copied first).
 #   e.g. main (no PR #22), pr/hd-alpha-cutoff (main + #22), release/1.0.3-beta (no #22), fix/hd-alpha-cutoff (beta + #22)
 param([Parameter(Mandatory)][string]$Branch)
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
 Set-Location $root
-$patch = Join-Path $root 'tools\debug\patches\devmenu.patch'
 
 if (git status --porcelain --untracked-files=no) { throw 'uncommitted changes: commit or stash them first' }
+# The kit is tracked: a branch without it has no tools\debug, so work from a copy of the patch made before the checkout.
+$patch = Join-Path ([IO.Path]::GetTempPath()) "devmenu-$PID.patch"
+Copy-Item (Join-Path $root 'tools\debug\patches\devmenu.patch') $patch -Force
 $before = git branch --show-current
 git checkout -q $Branch
 if ($LASTEXITCODE -ne 0) { throw "git checkout $Branch failed" }
@@ -25,5 +27,6 @@ try {
     }
 } finally {
     git checkout -q $before
+    Remove-Item $patch -ErrorAction SilentlyContinue
     "build     Play\ = $Branch + dev menu; source back on $before"
 }

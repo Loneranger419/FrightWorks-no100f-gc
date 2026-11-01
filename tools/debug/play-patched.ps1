@@ -14,9 +14,11 @@
 # true for this run only; both go back when the game closes (only that Config line: settings changed in game stay).
 # Removal also runs on a build failure or Ctrl+C. If the window is closed instead, run with -Remove.
 #   ... play-patched.ps1 -Remove [-Patch ...]  # just take the patches out
+#   ... play-patched.ps1 -NoBuild [-HdTextures] # play the build already in Play\ (e.g. from texhunt\build-devmenu.ps1)
 param(
     [string[]]$Patch = @('devmenu'),
     [switch]$SkipTranslate,
+    [switch]$NoBuild,
     [switch]$Keep,
     [switch]$CleanBuild,
     [switch]$HdTextures,
@@ -94,6 +96,7 @@ try {
         "hd        texture_pack\ScoobyHD on for this run"
     }
     foreach ($p in $files) {
+        if ($NoBuild) { break }
         if (Git-Apply @('--check', $p.File)) {
             Git-Apply @($p.File) | Out-Null
             $applied.Add($p)
@@ -105,8 +108,11 @@ try {
         }
     }
 
-    Build -Translate:(-not $SkipTranslate)
-    "playing   $(Split-Path -Leaf $exe) (patches come out when it closes)"
+    if ($NoBuild) { "playing   $(Split-Path -Leaf $exe) as built (-NoBuild: no patches applied)" }
+    else {
+        Build -Translate:(-not $SkipTranslate)
+        "playing   $(Split-Path -Leaf $exe) (patches come out when it closes)"
+    }
     $game = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -PassThru
     $game.WaitForExit()
     "closed    exit code $($game.ExitCode)"

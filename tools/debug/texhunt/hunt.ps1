@@ -6,8 +6,8 @@
 # After the game closes: loopcheck.py --scan 10 on the dump (autotest\audio-loop\hunt.raw); a window near 1.0 = stuck.
 # -Pack <folder>: play that pack instead of texture_pack\ScoobyHD (linked in its place; play-patched leaves a link it
 # didn't make alone, this script removes it): a full path (e.g. the HD-4X repo's work\pack) or a folder of autotest\texhunt.
-# -Branch <branch>: build and play that branch (e.g. main = without PR #22); the branch checked out before comes back
-# when the game closes. Needs a clean tree apart from untracked files.
+# -Branch <branch>: build that branch + dev menu (build-devmenu.ps1; the source comes straight back to the current
+# branch) and play the build. Needs a clean tree apart from untracked files.
 # -TexLog: the dev menu's texture log on from the start (Play\devmenu_texlog.csv, appended; delete it for a fresh log).
 param([string]$Boot = 'h001', [string]$Pack = '', [switch]$SkipTranslate, [string]$Branch = '', [switch]$TexLog)
 $ErrorActionPreference = 'Stop'
@@ -21,11 +21,10 @@ $packLink = Join-Path $root 'Play\UserData\texture_replacements\ScoobyHD'
 
 if (Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue) { throw 'the game is running; close it first' }
 if ($Branch) {
-    if (git status --porcelain --untracked-files=no) { throw 'uncommitted changes: commit or stash them first' }
-    $branchBefore = git branch --show-current
-    git checkout -q $Branch
-    if ($LASTEXITCODE -ne 0) { throw "git checkout $Branch failed" }
-    "hunt      building $Branch (was on $branchBefore)"
+    # build-devmenu.ps1 builds the branch and comes back to this one (the kit may not exist on that branch)
+    "hunt      building $Branch + dev menu"
+    & powershell -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'build-devmenu.ps1') -Branch $Branch
+    if ($LASTEXITCODE -ne 0) { throw "dev menu build of $Branch failed" }
 }
 try {
     # zz-manual (manual-session leftover) would also bring an sd2.ini
@@ -56,14 +55,10 @@ try {
     $env:AUDIO_RAW_DUMP = $dump
     if ($TexLog) { $env:NO100F_TEXLOG = '1' }
     $playArgs = @('-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'tools\debug\play-patched.ps1'), '-HdTextures')
-    if ($SkipTranslate -and -not $Branch) { $playArgs += '-SkipTranslate' }
+    if ($Branch) { $playArgs += '-NoBuild' } elseif ($SkipTranslate) { $playArgs += '-SkipTranslate' }
     & powershell @playArgs
 } finally {
     Remove-Item Env:AUDIO_RAW_DUMP, Env:NO100F_TEXLOG -ErrorAction SilentlyContinue
-    if ($branchBefore) {
-        git checkout -q $branchBefore
-        "hunt      source back on $branchBefore"
-    }
     Remove-Item -Recurse -Force $mod -ErrorAction SilentlyContinue
     if ($linked) { [IO.Directory]::Delete($packLink, $false) }  # the junction only
     "hunt      zz-hunt removed"
