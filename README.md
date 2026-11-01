@@ -40,7 +40,8 @@ Requires Windows 10/11 (64-bit) and **Night of 100 Frights, GameCube USA v1.01 (
 1. Unzip the [latest release](https://github.com/Loneranger419/FrightWorks-no100f-gc/releases/latest).
 2. Open `FrightWorks.exe`, choose your disc image on the **Play** page, then press **PLAY**.
 
-Settings are on the launcher's **Display** page and in game (**F10**). **F11** toggles fullscreen. Saves, settings
+Settings are on the launcher's **Display** page and in game (**F10**). **F11** toggles fullscreen, **F2** saves a
+screenshot to the `Screenshots` folder and **F1** opens this page in your browser. Saves, settings
 and mods live in `data\UserData`; unzip a new release over the old folder to update.
 
 Coming from Scooby-Doo: Refrightened? Unzip FrightWorks next to your old folder. On first start, the launcher offers

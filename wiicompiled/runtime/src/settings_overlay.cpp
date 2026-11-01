@@ -24,6 +24,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_gamepad.h>
 #include <SDL3/SDL_keyboard.h>
+#include <SDL3/SDL_misc.h>
 #include <SDL3/SDL_mouse.h>
 #include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_timer.h>
@@ -37,6 +38,8 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <ctime>
+#include <filesystem>
 #include <limits>
 #include <iostream>
 #include <string>
@@ -574,7 +577,7 @@ void DrawRebindPrompt() {
                 ? "Press a keyboard key."
                 : "Press a keyboard key or click a mouse button.");
         ImGui::TextUnformatted("Release any held input first. Backspace or Delete clears the mapping.");
-        ImGui::TextUnformatted("Escape can be bound. F10 is reserved for settings.");
+        ImGui::TextUnformatted("Escape can be bound. F1, F2 and F10 are reserved.");
         const float remaining = std::chrono::duration<float>(g_rebind.deadline - Clock::now()).count();
         ImGui::Text("Unmapped in %d seconds", std::max(0, static_cast<int>(std::ceil(remaining))));
         const bool clear = ImGui::Button("Clear mapping");
@@ -589,7 +592,8 @@ void DrawRebindPrompt() {
             int count = 0;
             const bool* keys = SDL_GetKeyboardState(&count);
             for (int i = 1; i < std::min(count, static_cast<int>(SDL_SCANCODE_COUNT)) && g_rebind.active; ++i) {
-                if (keys[i] && !g_rebind.keys[i] && i != SDL_SCANCODE_F10) CompleteRebind(i);
+                if (keys[i] && !g_rebind.keys[i] && i != SDL_SCANCODE_F10 && i != SDL_SCANCODE_F1 &&
+                    i != SDL_SCANCODE_F2) CompleteRebind(i);
                 g_rebind.keys[i] = keys[i];
             }
             const uint32_t mouse = SDL_GetMouseState(nullptr, nullptr);
@@ -1495,7 +1499,7 @@ void DrawStartupScreen() {
                 GameLayout::DrawText(list, view, *pmFont, u, 0.0f, cardY - 22.0f + bob, Fit(u, 17.0f), 0x3A2A18FFu,
                                      0x3A2A18FFu, 1.0f, 1, 1);
                 // How to reach the settings, along the card's bottom edge.
-                const auto hint = GameLayout::Utf16("F10 = settings menu   F11 = fullscreen / window");
+                const auto hint = GameLayout::Utf16("F10 = settings   F11 = fullscreen / window   F2 = screenshot");
                 GameLayout::DrawText(list, view, *pmFont, hint, 0.0f, cardY - hh + 16.0f + bob, Fit(hint, 12.0f),
                                      0x6A5A48FFu, 0x6A5A48FFu, 1.0f, 1, 1);
             }
@@ -1729,6 +1733,73 @@ bool IsToggleKey(const SDL_Event& event, SDL_Scancode code) {
     return event.type == SDL_EVENT_KEY_DOWN && !event.key.repeat && event.key.scancode == code;
 }
 
+// F1 opens the project page. F2 saves the next game frame (without the overlay) as a PNG in a
+// Screenshots folder beside the launcher: above data/ in a release, else the game exe's folder.
+constexpr const char* kProjectUrl = "https://github.com/Loneranger419/FrightWorks-no100f-gc";
+std::string g_noticeText;
+Clock::time_point g_noticeUntil{};
+std::filesystem::path g_lastScreenshot;
+
+void ShowNotice(std::string text) {
+    g_noticeText = std::move(text);
+    g_noticeUntil = Clock::now() + std::chrono::milliseconds(2500);
+}
+
+void TakeScreenshot() {
+    const auto exeDir = RuntimeConfigFile::ExecutableDirectory();
+    if (!exeDir) {
+        ShowNotice("Screenshot failed: game folder not found");
+        return;
+    }
+    std::filesystem::path root = *exeDir;
+    if (root.filename() == "data") root = root.parent_path();
+    const std::filesystem::path folder = root / "Screenshots";
+    std::error_code ec;
+    std::filesystem::create_directories(folder, ec);
+    const std::time_t now = std::time(nullptr);
+    std::tm local{};
+#if defined(_WIN32)
+    localtime_s(&local, &now);
+#else
+    localtime_r(&now, &local);
+#endif
+    char stamp[32] = {};
+    std::strftime(stamp, sizeof(stamp), "%Y-%m-%d_%H-%M-%S", &local);
+    const std::string base = std::string("FrightWorks_") + stamp;
+    std::filesystem::path file = folder / (base + ".png");
+    // Two presses in one second: the first file may not be written yet, so skip its name too.
+    for (int n = 2; file == g_lastScreenshot || std::filesystem::exists(file, ec); ++n) {
+        file = folder / (base + "_" + std::to_string(n) + ".png");
+    }
+    g_lastScreenshot = file;
+    aurora_request_screenshot(RuntimeConfigFile::PathToUtf8(file).c_str());
+}
+
+void DrawNotice() {
+    if (const int result = aurora_take_screenshot_result(); result != 0) {
+        ShowNotice(result > 0 ? "Screenshot saved: Screenshots\\" + RuntimeConfigFile::PathToUtf8(g_lastScreenshot.filename())
+                              : std::string("Screenshot failed (see the log)"));
+    }
+    if (g_noticeText.empty() || Clock::now() >= g_noticeUntil) {
+        return;
+    }
+    constexpr float kMargin = 10.0f;
+    const ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(kMargin, io.DisplaySize.y - kMargin), ImGuiCond_Always, ImVec2(0.0f, 1.0f));
+    ImGui::SetNextWindowBgAlpha(0.55f);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_AlwaysAutoResize |
+                                        ImGuiWindowFlags_NoDecoration |
+                                        ImGuiWindowFlags_NoFocusOnAppearing |
+                                        ImGuiWindowFlags_NoInputs |
+                                        ImGuiWindowFlags_NoMove |
+                                        ImGuiWindowFlags_NoNav |
+                                        ImGuiWindowFlags_NoSavedSettings;
+    if (ImGui::Begin("Notice", nullptr, kFlags)) {
+        ImGui::TextUnformatted(g_noticeText.c_str());
+    }
+    ImGui::End();
+}
+
 bool IsMouseActivity(const SDL_Event& event) {
     switch (event.type) {
     case SDL_EVENT_MOUSE_MOTION:
@@ -1841,6 +1912,12 @@ void HandleEvents(const AuroraEvent* events) noexcept {
             aurora_set_display_mode(mode);
             g_displayMode = static_cast<int>(aurora_get_display_mode());
             RuntimeConfigFile::SetDisplayMode(std::string(kDisplayModeConfigNames[static_cast<size_t>(g_displayMode)]));
+        }
+        if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F1)) {
+            if (!SDL_OpenURL(kProjectUrl)) ShowNotice(std::string("Couldn't open ") + kProjectUrl);
+        }
+        if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F2)) {
+            TakeScreenshot();
         }
         if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F10)) {
             SetTopBarVisible(!g_topBarVisible);
@@ -1963,6 +2040,7 @@ void Draw() noexcept {
     }
     NetplayUi::Draw();
     DrawFpsOverlay();
+    DrawNotice();
     DrawTopBar();
     DrawExitPrompt();
     controller_mapping_wizard::Draw();
