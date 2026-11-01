@@ -106,6 +106,8 @@ struct RuntimeUserConfig {
     // "dpad_up,left_shoulder") as values; pressing either bound button counts.
     std::array<std::optional<std::string>, 12> controllerButtons;
     std::optional<bool> rumbleEnabled;
+    // [controller] layout: "gamecube" (default) or "xbox_original" (hle/no100f_xbox_layout.h).
+    std::optional<std::string> controllerLayout;
     std::optional<int32_t> muteHotkey;
     std::map<std::string, std::string> controllerExpressions;
     // NSMBW: [keyboard] action = "comma-separated SDL scancode names" (keybinds.h).
@@ -535,6 +537,7 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     }
 
     config.rumbleEnabled = FindConfigValue<bool>(document, "controller", "rumble");
+    config.controllerLayout = FindConfigValue<std::string>(document, "controller", "layout");
     if (auto value = FindConfigInt(document, "audio", "mute_key")) {
         config.muteHotkey = *value;
     }
@@ -941,6 +944,16 @@ inline bool RumbleEnabled(bool fallback = true) {
 inline bool SetRumbleEnabled(bool value) {
     Mutable().rumbleEnabled = value;
     return WriteSetting("controller", "rumble", value ? "true" : "false");
+}
+
+inline bool XboxOriginalLayout() {
+    const auto& layout = Get().controllerLayout;
+    return layout && *layout == "xbox_original";
+}
+
+inline bool SetXboxOriginalLayout(bool value) {
+    Mutable().controllerLayout = value ? "xbox_original" : "gamecube";
+    return WriteSetting("controller", "layout", FormatString(*Mutable().controllerLayout));
 }
 
 inline int32_t MuteHotkey(int32_t fallback) {
