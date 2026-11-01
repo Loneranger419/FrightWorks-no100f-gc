@@ -66,6 +66,69 @@ setup when the game closes.
 Patches are against upstream `main` `e600261` unless the table says otherwise. `gx-draw-probes.patch` was rebased onto
 PR #8 `622b97a` and not rebuilt since.
 
+### F8 developer menu
+
+`patches\devmenu.patch` is rebased onto FrightWorks `main` `114ab73`. It is **opt-in**: normal source builds do not
+contain the menu, texture inspection hooks, or its test target. Apply only this patch to enable F8; no audio diagnostic
+patch, audio capture, private texture pack, or generated catalogue is required.
+
+The existing build/play wrappers replace the repository's `Play\` executable. Use an isolated checkout and preserve
+running games, settings, and saves. For build-only validation, with the pinned tools/dependencies and your own supported
+disc already prepared:
+
+```powershell
+git apply --check tools\debug\patches\devmenu.patch
+git apply tools\debug\patches\devmenu.patch
+# Rebuild the translator first if switching branches changed its source.
+powershell -NoProfile -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -ConfigureOnly -SkipTools -Jobs 4
+$env:PATH = (Join-Path $PWD 'toolchain\llvm-mingw\bin') + ';' + $env:PATH
+toolchain\CMake\bin\cmake.exe --build wiicompiled\native-build --target WiiCompiled no100f_devmenu_state_tests --parallel 4
+toolchain\CMake\bin\ctest.exe --test-dir wiicompiled\native-build -R '^no100f_devmenu_state_tests$' --output-on-failure
+git apply -R --check tools\debug\patches\devmenu.patch
+git apply -R tools\debug\patches\devmenu.patch
+```
+
+The configure-only command does not perform the build script's final executable replacement. Removing the patch
+restores source, not any executable previously built with it. Fully retranslate on the first build after applying or
+removing a patch that changes native overrides; do not use `-SkipTranslate` for that build.
+
+In a patched build, press **F8** to open the menu. The Textures or Effects tab itself is the inspector; there is no
+additional tool to open. Effects inspects runtime effect textures, not gameplay-effects toggles.
+
+- **Skip:** recorded cutscenes use the game's normal A/Confirm input; title/demo contexts use Start. Short repeated
+  presses stop when the original game mode, state, or cutscene-manager pointer changes, or after ten seconds.
+  The game may refuse a skip during its initial unskippable interval. Guest movie pointers and audio state are not reset.
+- **Travel:** start or load a game first. Scene requests wait for normal play, player control, and an available portal,
+  then submit once through the normal portal path. Only one scene/spot transfer can be pending. Waiting requests can
+  be canceled; cancellation is disabled once the load starts. The 60-second scene-request timeout never clears an
+  in-flight guest portal. Cross-scene saved spots wait for arrival and settling before restoring position/camera.
+- **Free camera:** travel turns it off; camera application also rejects a changed scene pointer or ID.
+- **Inspectors:** Textures and Effects have separate categories, widget IDs, and scene/fine filters. Reload rereads the
+  catalogue. Tables scroll in both directions so long metadata and saved-spot controls remain accessible. Missing data
+  and an all-filtered result have distinct messages.
+
+The optional catalogue is `UserData\devmenu_textures.txt`, in the runtime's application-data directory. It uses tabs:
+
+```text
+id<TAB>replacement key<TAB>severity<TAB>asset<TAB>space-separated scene IDs<TAB>level<TAB>optional category
+```
+
+The first six fields describe a texture entry. A seventh value beginning with `effect` identifies an Effects entry;
+leading whitespace and case are ignored, and `effect:particle` is accepted. Other entries appear in Textures.
+No catalogue or replacement images are shipped with the patch. Without a catalogue, the inspector explains where to
+put it and how to reload. Actual replacement highlighting requires the corresponding legitimate replacement assets.
+
+The state tests cover invalid/busy requests, waiting, one-shot submission, arrival, cancellation, timeout, skip pulse
+expiry/context cancellation, skip-control selection, and effect-category parsing; assertions stay enabled in Release.
+
+Earlier isolated **v2** playtests verified the opening-story skip, title/demo exit, repeated h001/h002 transfers,
+free-camera reset, saved-spot return, and inspector categories/filter/reload behavior. **V3** changed inspector rendering:
+its separate visual check verified horizontal access to long-metadata/saved-spot/Find controls, vertical access through
+20 synthetic rows, and visible all-filtered/missing-catalogue messages. Temporary test data was removed.
+Those playtests used the earlier local backport checkout, not this rebased patch on current main. Do not count them as
+fresh runtime verification of the final PR source. Real replacement highlighting and all-level/long-run travel
+reliability remain unverified.
+
 Requirements: Python 3 with numpy + Pillow (+ `capstone` for `dol.py`/`overrides.py`, SciPy for `creeper-frames.py`). The
 `capture\` tools use ffmpeg from PATH; without one, `capture\get-ffmpeg.ps1` downloads the BtbN win64 GPL build once into
 `tools\debug\local\ffmpeg` (SHA-256 checked).
