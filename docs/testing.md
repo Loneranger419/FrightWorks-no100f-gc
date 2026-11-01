@@ -99,6 +99,12 @@ monsters off (all or one by one), a Textures tab (find a texture, mark it), an E
 saved in `Play\UserData\devmenu_spots.txt`. More commands (scripted through `Play\devmenu.txt`) are in the
 `game-logic-debug` skill.
 
+The Textures and Effects tabs list textures from `Play\UserData\devmenu_textures.txt`, one per line, tab-separated:
+`id  file  severity  asset  scenes  level  [effect]` (`scenes` space-separated, `boot` = every scene; `#` starts a
+comment). Lines whose seventh column starts with `effect` go on the Effects tab: textures drawn at runtime (bonks,
+pickups, particles), not a switch for gameplay effects. Edit the file while the game runs and press **Reload**. The
+free camera turns itself off when the scene changes.
+
 Options: `-Patch devmenu,postool` (several patches), `-CleanBuild` (rebuild `Play\` without the patch afterwards),
 `-Keep` (leave it applied to work on it; re-export the patch afterwards), `-Remove` (take the patches out if the
 window was closed instead of the game), `-SkipTranslate` (only if the last build was from the same branch with the

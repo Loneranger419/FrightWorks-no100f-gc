@@ -80,7 +80,8 @@ scripts: `Play/devmenu_press.txt`, read every 30 frames even outside play, lines
 while `cutscene yes`, then waits for `control yes`.
 
 Textures tab (for HD pack audits): reads `UserData/devmenu_textures.txt` (tab-separated `id file severity asset scenes level`,
-`#` comments) and lists those replacement textures per scene, each marked "drawn" once the game has used it since start
+optional seventh column starting with `effect`, any case = Effects tab instead; `#` comments; the Reload button re-reads
+it; each tab keeps its own "This scene only" / "Hide fine" filters) and lists those replacement textures per scene, each marked "drawn" once the game has used it since start
 (aurora `aurora_texture_replacement_used(name)`, added by the patch: names are recorded when a replacement is looked up).
 Each row can save a spot named after the ID or go to it; suspects whose scenes include `boot` count in every scene.
 Find (row button or `find <id>`) draws that replacement solid magenta and writes each distinct GX state it is drawn with to
