@@ -253,7 +253,7 @@ sealed class MainForm : Form
     void BuildControls(FlowLayoutPanel body)
     {
         body.Controls.Add(Note("Gamepads (Xbox, PlayStation, Switch Pro, GameCube adapter...) work right away as a GameCube controller. " +
-                               "To change any button, press F10 in the game and open Controller settings."));
+                               "To change any button, press F10 in the game and open the Controls page."));
         body.Controls.Add(Title("Gamepad"));
         padStatus = FieldLabel("Looking for controllers...");
         padStatus.Margin = S(0, 4, 0, 6);
@@ -271,7 +271,7 @@ sealed class MainForm : Form
         body.Controls.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display, " +
                                "LT gum, RT run, LB soap bubble (Xbox White), RB sneak (Xbox Black); the bumpers work together with the " +
                                "triggers, and the hints in the game name these buttons. GameCube: B head smash and back in menus, " +
-                               "X dig / enter / talk, Z + L soap bubble, Z + R sneak (Z = RB). Also in F10 > Controller."));
+                               "X dig / enter / talk, Z + L soap bubble, Z + R sneak (Z = RB). Also in F10 > Controls."));
         body.Controls.Add(Title("Keyboard"));
         table = Table();
         foreach (var (what, key) in new[] { ("Move", "W A S D"), ("Camera (C-stick)", "Arrow keys"), ("A (jump)", "Space"), ("B", "Left Shift"),
@@ -351,6 +351,12 @@ sealed class MainForm : Form
         body.Controls.Add(Note("Outside Mystic Manor and in the playground, the game celebrates holidays on their real dates. " +
                                "Pick one to see it any day, or turn them off."));
 
+        body.Controls.Add(Title("Developer tools"));
+        body.Controls.Add(DevToolsBox());
+        body.Controls.Add(Note("For testing and bug hunting: F8 in the game opens the dev menu (go to any level, saved spots, " +
+                               "free camera, god mode, texture finder), and the game shows DEV and its build in the corner. " +
+                               "Applies the next time the game starts."));
+
         body.Controls.Add(Title("Folders"));
         var folders = Row();
         folders.Controls.Add(new PlankButton("Game", (_, _) => OpenFolder(play)));
@@ -360,8 +366,8 @@ sealed class MainForm : Form
 
         body.Controls.Add(Title("About"));
         body.Controls.Add(Note("FrightWorks by Loneranger419, based on Scooby-Doo: Refrightened by JosiahG. Built on WiiCompiled (GPLv3) " +
-                               "and Aurora (MIT). HD texture pack by dogerki. Button prompts by Kenney (CC0). Sign lettering in " +
-                               "Luckiest Guy by Astigmatic (Apache 2.0). " +
+                               "and Aurora (MIT). HD texture pack by dogerki. Button prompts by Kenney (CC0). Lettering in " +
+                               "Luckiest Guy by Astigmatic and in-game menu text in Roboto by Christian Robertson (both Apache 2.0). " +
                                "Scooby-Doo is a trademark of Hanna-Barbera / Warner Bros.; this is an unofficial fan project."));
         body.Controls.Add(new PlankButton("Project page", (_, _) => Process.Start(new ProcessStartInfo(ProjectUrl) { UseShellExecute = true })));
     }
@@ -387,6 +393,22 @@ sealed class MainForm : Form
             if (box.SelectedIndex >= Holidays.Length) return;
             var c = new GameConfig(configPath);
             c.SetString("game", "holiday", Holidays[box.SelectedIndex].value);
+            c.Save();
+        };
+        return box;
+    }
+
+    // [game] dev_tools: the F8 dev menu and the DEV build mark (the game reads it at startup).
+    Control DevToolsBox()
+    {
+        var box = new ThemedCombo();
+        box.Items.Add("Off");
+        box.Items.Add("On (F8 dev menu, DEV mark)");
+        box.SelectedIndex = new GameConfig(configPath).Get("game", "dev_tools") == "true" ? 1 : 0;
+        box.SelectedIndexChanged += (_, _) =>
+        {
+            var c = new GameConfig(configPath);
+            c.Set("game", "dev_tools", box.SelectedIndex == 1 ? "true" : "false");
             c.Save();
         };
         return box;
@@ -511,7 +533,7 @@ sealed class MainForm : Form
         body.Controls.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk, LT gum, RT run, LB soap bubble, RB sneak. " +
                                "The bumpers work together with the triggers, like on the Xbox."));
         body.Controls.Add(Note("GameCube: B head smash, X dig / enter / talk, RB (Z) + a trigger for soap bubble and sneak."));
-        body.Controls.Add(Note("You can change this any time in Settings > Controls or in the game (F10 > Controller)."));
+        body.Controls.Add(Note("You can change this any time in Settings > Controls or in the game (F10 > Controls)."));
         var row = Row();
         row.Margin = S(0, 8, 0, 0);
         bool? answer = null;

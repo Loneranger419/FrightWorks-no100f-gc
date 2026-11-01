@@ -54,6 +54,7 @@ struct RuntimeUserConfig {
     std::optional<bool> skipIntro;
     std::optional<bool> fps60;
     std::optional<std::string> holiday;  // NO100F [game] holiday: "auto" (today), "off" or "MM-DD"
+    std::optional<bool> devTools;        // NO100F [game] dev_tools: F8 dev menu + DEV build mark (launcher Extras)
     std::optional<uint32_t> msaa;
     std::optional<bool> spinningCoins;  // NSMBW: [video] spinning_coins, animated tiles
     std::optional<bool> frameGraph;     // NSMBW: [video] frame_graph, frame times under the FPS counter
@@ -437,7 +438,9 @@ inline void EnsureConfigFile() {
               "[game]\n"
               "# Holiday events in the hubs (fireworks, Halloween bats, ...): \"auto\" = by today's date,\n"
               "# \"off\" = never, or \"MM-DD\" to pretend it is that day (e.g. \"10-31\").\n"
-              "holiday = \"auto\"\n\n"
+              "holiday = \"auto\"\n"
+              "# Developer tools: the F8 dev menu (travel, spots, free camera, texture finder) and a DEV build mark.\n"
+              "dev_tools = false\n\n"
               "[audio]\n"
               "volume = 1.0\n"
               "music_volume = 1.0\n"
@@ -613,6 +616,9 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
     config.showFps = FindConfigValue<bool>(document, "video", "show_fps");
     config.skipIntro = FindConfigValue<bool>(document, "video", "skip_intro");
     config.fps60 = FindConfigValue<bool>(document, "video", "fps60");
+    if (auto value = FindConfigValue<bool>(document, "game", "dev_tools")) {
+        config.devTools = *value;
+    }
     if (auto value = FindConfigValue<std::string>(document, "game", "holiday"); value && IsSupportedHoliday(*value)) {
         config.holiday = *value;
     }
@@ -1200,6 +1206,16 @@ inline bool SkipIntro(bool fallback = false) {
 // NO100F: the date the hubs' holiday events see (launcher "Holidays"): "auto" = today, "off" = none, "MM-DD" = that day.
 inline std::string Holiday() {
     return Get().holiday.value_or("auto");
+}
+
+// NO100F [game] dev_tools: the F8 dev menu and the DEV build mark. Read at startup: the dev menu reserves a page of
+// guest memory before boot only when it is on. NO100F_DEV_TOOLS=1 (or 0) overrides the file: the debug kit's scripts
+// (tools/debug) set it so their sessions have the dev menu without touching the player's settings.
+inline bool DevTools() {
+    if (const char* env = std::getenv("NO100F_DEV_TOOLS"); env != nullptr && *env != '\0') {
+        return *env != '0';
+    }
+    return Get().devTools.value_or(false);
 }
 
 inline bool ShowFps(bool fallback = true) {

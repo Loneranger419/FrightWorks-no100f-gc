@@ -47,6 +47,10 @@ Settings are in the launcher (**Settings**) and in game (**F10**). **F11** toggl
 screenshot to the `Screenshots` folder and **F1** opens this page in your browser. Saves, settings
 and mods live in `data\UserData`; unzip a new release over the old folder to update.
 
+For testing: **Extras > Developer tools** in the launcher turns on the **F8** dev menu (go to any level, saved spots,
+free camera, god mode, texture finder) and a **DEV** mark with the build in the corner of the game. The build (version,
+branch and commit of a test build) is also on the F10 **About** page and at the top of `console.log`.
+
 Coming from Scooby-Doo: Refrightened? Unzip FrightWorks next to your old folder. On first start, the launcher offers
 to copy your saves, settings, controls, mods and game files over; the old folder is left as it is.
 
@@ -81,7 +85,8 @@ Tests, playtest sessions and the debug tools (dev menu, logs, scripted input): [
 - HD texture pack by **dogerki**
   ([Dolphin forums](https://forums.dolphin-emu.org/Thread-scooby-doo-night-of-100-frights-hd-texture-pack-ai))
 - Button prompts from [Kenney's Input Prompts](https://kenney.nl/assets/input-prompts) (CC0)
-- Launcher lettering: [Luckiest Guy](https://fonts.google.com/specimen/Luckiest+Guy) by Astigmatic (Apache 2.0)
+- Launcher and in-game menu lettering: [Luckiest Guy](https://fonts.google.com/specimen/Luckiest+Guy) by Astigmatic
+  (Apache 2.0); in-game menu text: [Roboto](https://fonts.google.com/specimen/Roboto) by Christian Robertson (Apache 2.0)
 
 ## License
 
@@ -90,8 +95,9 @@ Scooby-Doo: Refrightened by JosiahG, changed by Loneranger419 from 2026-10-31 on
 
 Not covered by the GPL (these stay under their owners' terms):
 
-- `launcher/fonts/LuckiestGuy-Regular.ttf`: the Luckiest Guy font by Astigmatic, Apache License 2.0
-  ([`launcher/fonts/LuckiestGuy-LICENSE.txt`](launcher/fonts/LuckiestGuy-LICENSE.txt))
+- `launcher/fonts/LuckiestGuy-Regular.ttf` and `wiicompiled/runtime/assets/fonts/LuckiestGuy-Regular.ttf`: the Luckiest
+  Guy font by Astigmatic, Apache License 2.0 ([`launcher/fonts/LuckiestGuy-LICENSE.txt`](launcher/fonts/LuckiestGuy-LICENSE.txt))
+- `wiicompiled/runtime/assets/fonts/Roboto-Medium.ttf`: the Roboto font by Christian Robertson, Apache License 2.0
 - `docs/`: screenshots of the game and the launcher
 
 Scooby-Doo ™ & © Hanna-Barbera / Warner Bros. Night of 100 Frights © THQ / Warner Bros. Interactive, developed by

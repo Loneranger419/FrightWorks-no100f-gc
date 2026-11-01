@@ -4,6 +4,7 @@
 # -CmdAt seconds after the scene loaded. Restores Config.user.toml, zz-manual and the texture link afterwards.
 param([string]$Label = 'A', [string]$Boot = 'h001', [int]$Seconds = 45, [switch]$Hd, [string]$Cmd = '', [int]$CmdAt = 20)
 $ErrorActionPreference = 'Stop'
+$env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
 Set-Location $root
 $play = Join-Path $root 'Play'

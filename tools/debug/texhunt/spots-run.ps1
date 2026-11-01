@@ -10,6 +10,7 @@ param([string]$Boot = 'h001', [string]$Ids = '', [string]$Mode = 'hd', [int]$Set
       [string]$Branch = '', [string]$Pack = '')
 $label = if ($Tag) { "$Mode-$Tag" } else { $Mode }  # file name suffix: <spot>-<Mode>[-<Tag>].png
 $ErrorActionPreference = 'Stop'
+$env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
 Set-Location $root
 $play = Join-Path $root 'Play'

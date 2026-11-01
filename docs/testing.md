@@ -86,8 +86,11 @@ Copy-Item tools\debug\local\Config.user.toml Play\UserData\Config.toml
 
 ## 5. Dev menu (F8)
 
-The dev menu is a patch (`tools/debug/patches/devmenu.patch`), not part of the game. `play-patched.ps1` applies it,
-builds, starts the game, and takes it out of the source again when you close the game:
+The dev menu is part of the game, off unless **Extras > Developer tools** is on in the launcher (`[game] dev_tools =
+true` in `Config.toml`) or `NO100F_DEV_TOOLS=1` is set; the scripts in `tools/debug` set that variable for their
+sessions. With it on, the game shows **DEV** and its build in the bottom-right corner. `play-patched.ps1` builds,
+starts the game with the dev menu on and, for branches from before the dev menu was built in, applies
+`tools/debug/patches/devmenu.patch` and takes it out again when you close the game:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\debug\play-patched.ps1              # dev menu
@@ -113,9 +116,15 @@ window was closed instead of the game), `-SkipTranslate` (only if the last build
 same patches), `-NoBuild` (play what's in `Play\`).
 
 A dev-menu build of another branch: `tools\debug\texhunt\build-devmenu.ps1 -Branch <branch>`, then
-`play-patched.ps1 -NoBuild`. If the patch no longer applies on a branch, it needs updating in a debug-kit PR.
+`play-patched.ps1 -NoBuild` (branches with the built-in dev menu are built as they are). The patch is only for older
+branches now; change the dev menu in `wiicompiled/runtime/src/no100f_devmenu.cpp`.
 
-**After a dev-menu build, the next normal build must be a full build** (no `-SkipTranslate`), or use `-CleanBuild`.
+**On an older branch, after a dev-menu patch build the next normal build must be a full build** (no `-SkipTranslate`),
+or use `-CleanBuild`.
+
+Every build knows what it was built from: the F10 **About** page, the DEV mark and the first lines of `console.log`
+show the version and, for a test build, `branch@commit` plus `+xxxx` when it had uncommitted changes (a hash of
+them, so two builds with different edits differ).
 
 ## 6. Other diagnostic patches
 
@@ -126,7 +135,7 @@ useful:
 
 | Patch | What it adds |
 | --- | --- |
-| `devmenu` | F8 dev menu (above) |
+| `devmenu` | F8 dev menu for branches from before it was built in (above) |
 | `postool` | Live memory: write `dump NAME`, `peek ADDR [N]` or `poke ADDR HEX...` lines to `Play\postool.txt` (run every 20 frames, output in `Play\postool\`); **F9** saves Scooby's position to `Play\postool\spots.txt` |
 | `audio-diagnostic` | Per-stage audio dumps (`AX_DIAG_DIR`) |
 | `real-date` | Real clock for old builds that always start on 2000-01-01 |

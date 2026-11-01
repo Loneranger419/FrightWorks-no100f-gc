@@ -210,6 +210,15 @@ bool aurora_is_metalfx_spatial_supported();
 // Button prompt textures for the controller in use: 0 xbox, 1 playstation, 2 nintendo, -1 the game's own;
 // +3 for the same set with B and X swapped (original Xbox controls in gameplay).
 void aurora_set_button_icon_style(int style);
+// Dev menu (F8): whether texture_replacements/<name>.png|.dds has been drawn since start.
+bool aurora_texture_replacement_used(const char* name);
+// Dev menu (F8): forget what has been drawn (the dev menu tracks drawn per level).
+void aurora_texture_replacement_reset_used();
+// Dev menu (F8): draw the replacement with this file name (no extension) solid magenta; nullptr or "" = off.
+void aurora_texture_replacement_highlight(const char* name);
+// Dev menu (F8): log every texture's draw states to devmenu_texlog.csv, rows tagged with this scene; nullptr or
+// "" = off.
+void aurora_texture_log(const char* scene);
 AuroraMetalFXStatus aurora_get_metalfx_status();
 
 AuroraBackend aurora_get_backend();

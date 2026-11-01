@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <list>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string_view>
 
@@ -728,6 +729,112 @@ bool report_missing_key(const RuntimeTextureKey& key, const GXTexObj_& obj) noex
   return true;
 }
 
+// Dev menu (F8): names of the replacements the game has drawn since start, for the dev menu's Textures tab.
+// find_replacement runs once per texture upload (the GX texture caches keep the handle), so this stays cheap.
+absl::flat_hash_set<RuntimeTextureKey> s_usedKeys;
+absl::flat_hash_set<std::string> s_usedNames;
+std::mutex s_usedMutex;
+
+void note_used_replacement(const RuntimeTextureKey& key) noexcept {
+  std::lock_guard lock(s_usedMutex);
+  if (!s_usedKeys.insert(key).second) {
+    return;
+  }
+  auto name = format_replacement_filename(key);
+  name.resize(name.size() - 4);  // ".dds"
+  s_usedNames.insert(std::move(name));
+}
+
+bool replacement_used(std::string_view name) noexcept {
+  std::lock_guard lock(s_usedMutex);
+  return s_usedNames.contains(name);
+}
+
+// Dev menu (F8): forget what was drawn (new level). Raises the highlight-change flag so the GX caches are
+// dropped and every texture still on screen goes through find_replacement (and gets noted) again.
+std::atomic<bool> s_highlightChanged{false};
+
+void reset_used() noexcept {
+  {
+    std::lock_guard lock(s_usedMutex);
+    s_usedKeys.clear();
+    s_usedNames.clear();
+  }
+  s_highlightChanged.store(true);
+}
+
+// Dev menu (F8): the dev menu's "Find" draws one replacement solid magenta so it stands out in the scene.
+std::optional<RuntimeTextureKey> s_highlightKey;  // guarded by s_usedMutex
+gfx::TextureHandle s_highlightTexture;
+
+void set_highlight(std::string_view name) noexcept {
+  std::optional<RuntimeTextureKey> key;
+  if (!name.empty()) key = parse_replacement_filename(std::string(name) + ".dds");
+  std::lock_guard lock(s_usedMutex);
+  s_highlightKey = key;
+  s_highlightChanged.store(true);
+}
+
+bool take_highlight_change() noexcept { return s_highlightChanged.exchange(false); }
+
+bool is_highlighted(const RuntimeTextureKey& key) noexcept {
+  std::lock_guard lock(s_usedMutex);
+  return s_highlightKey.has_value() && *s_highlightKey == key;
+}
+
+bool is_highlight_handle(const gfx::TextureHandle& handle) noexcept { return handle && handle == s_highlightTexture; }
+
+// Dev menu (F8): the texture log's scene tag; the dev menu sets it when the scene or its log switch changes.
+std::mutex s_texLogMutex;
+std::string s_texLogScene;  // guarded by s_texLogMutex
+std::atomic<uint32_t> s_texLogGeneration{0};
+
+void set_texture_log_scene(std::string_view scene) noexcept {
+  std::lock_guard lock(s_texLogMutex);
+  s_texLogScene = scene;
+  s_texLogGeneration.fetch_add(1);
+}
+
+std::string texture_log_scene() noexcept {
+  std::lock_guard lock(s_texLogMutex);
+  return s_texLogScene;
+}
+
+uint32_t texture_log_generation() noexcept { return s_texLogGeneration.load(std::memory_order_relaxed); }
+
+gfx::TextureHandle highlight_texture() noexcept {
+  if (s_highlightTexture) return s_highlightTexture;
+  constexpr wgpu::Extent3D size{.width = 4, .height = 4, .depthOrArrayLayers = 1};
+  const wgpu::TextureDescriptor textureDescriptor{
+      .label = "TextureReplacement highlight",
+      .usage = wgpu::TextureUsage::TextureBinding | wgpu::TextureUsage::CopyDst,
+      .dimension = wgpu::TextureDimension::e2D,
+      .size = size,
+      .format = wgpu::TextureFormat::RGBA8Unorm,
+      .mipLevelCount = 1,
+      .sampleCount = 1,
+  };
+  auto texture = g_device.CreateTexture(&textureDescriptor);
+  const wgpu::TextureViewDescriptor textureViewDescriptor{
+      .label = "TextureReplacement highlight view",
+      .format = wgpu::TextureFormat::RGBA8Unorm,
+      .dimension = wgpu::TextureViewDimension::e2D,
+      .mipLevelCount = 1,
+  };
+  auto textureView = texture.CreateView(&textureViewDescriptor);
+  s_highlightTexture = std::make_shared<gfx::TextureRef>(std::move(texture), std::move(textureView), wgpu::TextureView{},
+                                                         size, wgpu::TextureFormat::RGBA8Unorm, 1, gfx::InvalidTextureFormat);
+  s_highlightTexture->isReplacement = true;
+  std::array<uint8_t, 4 * 4 * 4> magenta{};
+  for (size_t i = 0; i < magenta.size(); i += 4) {
+    magenta[i] = 255;
+    magenta[i + 2] = 255;
+    magenta[i + 3] = 255;
+  }
+  gfx::write_texture(*s_highlightTexture, {magenta.data(), magenta.size()});
+  return s_highlightTexture;
+}
+
 void initialize() noexcept { build_index(); }
 
 void shutdown() noexcept {
@@ -741,6 +848,7 @@ void shutdown() noexcept {
   }
   s_replacementLru.clear();
   for (auto& icons : s_buttonIconIndex) icons.clear();
+  s_highlightTexture = {};
   s_replacementCacheBytes = 0;
   s_replacementRoot.clear();
   s_dumpRoot.clear();
@@ -824,6 +932,10 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
   if (path == nullptr) {
     if (g_config.allowTextureReplacements) report_missing_key(key, obj);
     return std::nullopt;
+  }
+  note_used_replacement(key);
+  if (is_highlighted(key)) {
+    return highlight_texture();
   }
 
   if (const auto* cached = find_cached_replacement(key); cached != nullptr) {

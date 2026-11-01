@@ -53,10 +53,12 @@ Start-Process 'Play\FrightWorks Game.exe' -WorkingDirectory Play   # not manual-
 - Poking only Scooby's matrix doesn't stick (the frame rebuilds it); the dev menu's teleport (below) does, or use the spawn.
 - Clean up afterwards: delete `Play\UserData\mods\zz-manual`, copy `tools\debug\local\Config.user.toml` back.
 
-## Dev menu (`tools/debug/patches/devmenu.patch`, `no100f_devmenu.cpp`)
+## Dev menu (`no100f_devmenu.cpp`; `tools/debug/patches/devmenu.patch` for older branches)
 
-Run: `powershell -ExecutionPolicy Bypass -File tools\debug\play-patched.ps1` applies the patch, builds, starts the game
-and takes the patch out of the source when the game closes (`-SkipTranslate` only if the last build was this branch;
+Built into the game, active with `[game] dev_tools = true` (launcher Extras > Developer tools) or `NO100F_DEV_TOOLS=1`
+(set by the kit's scripts). Run: `powershell -ExecutionPolicy Bypass -File tools\debug\play-patched.ps1` builds and
+starts the game with it on; on a branch from before it was built in, it applies the patch and takes it out of the
+source when the game closes (`-SkipTranslate` only if the last build was this branch;
 `-CleanBuild` rebuilds `Play\` without it afterwards; `-Keep` to work on the menu, then re-export the patch and `-Remove`).
 `-HdTextures` plays with the HD texture pack like the release does (`texture_pack\ScoobyHD` linked into
 `Play\UserData\texture_replacements`, `texture_replacements = true`; both put back afterwards). The user's config has HD off,

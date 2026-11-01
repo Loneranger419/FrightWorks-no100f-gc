@@ -25,6 +25,7 @@ param(
     [switch]$Remove
 )
 $ErrorActionPreference = 'Stop'
+$env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path  # this file is tools\debug\play-patched.ps1
 $patchDir = Join-Path $PSScriptRoot 'patches'
 $exe = Join-Path $root 'Play\FrightWorks Game.exe'
@@ -80,6 +81,8 @@ if ($Remove) {
 
 if (Get-Process | Where-Object { $_.Path -eq $exe }) { throw "the game is already running from Play\; close it first" }
 $applied = New-Object System.Collections.Generic.List[object]
+& git -C $root cat-file -e 'HEAD:wiicompiled/runtime/src/no100f_devmenu.cpp' 2>$null
+$builtInDevmenu = $LASTEXITCODE -eq 0
 $hdOld = $null; $hdSet = $false; $linked = $false
 try {
     if ($HdTextures) {
@@ -97,6 +100,8 @@ try {
     }
     foreach ($p in $files) {
         if ($NoBuild) { break }
+        # The dev menu is part of the game since it was built in (NO100F_DEV_TOOLS above switches it on).
+        if ($p.Name -eq 'devmenu' -and $builtInDevmenu) { "built in  devmenu (dev tools on for this run)"; continue }
         if (Git-Apply @('--check', $p.File)) {
             Git-Apply @($p.File) | Out-Null
             $applied.Add($p)
