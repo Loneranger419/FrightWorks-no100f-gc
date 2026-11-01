@@ -1368,9 +1368,21 @@ GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noex
   return nullptr;
 }
 
+// The button prompt set changed. The prompt atlas's guest bytes did not, so the source caches (checked against those
+// bytes) would keep handing out the old set's texture: drop their replacement textures (texture_replacement keeps its
+// own cache of the others) and bump the revision so the per-object caches resolve again.
+static void drop_replacement_texture_sources() noexcept {
+  const auto isReplacement = [](const auto& item) { return item.second.handle && item.second.handle->isReplacement; };
+  absl::erase_if(s_staticTextureSourceCache, isReplacement);
+  absl::erase_if(s_staticPaletteTextureSourceCache, isReplacement);
+  clear_static_source_front_cache();
+  ++s_textureCacheStamps;
+  invalidate_static_texture_cache();
+}
+
 void resolve_sampled_textures(const ShaderInfo& info) noexcept {
   ZoneScoped;
-  if (gfx::texture_replacement::take_button_icon_style_change()) invalidate_static_texture_cache();
+  if (gfx::texture_replacement::take_button_icon_style_change()) drop_replacement_texture_sources();
 
   for (u32 i = 0; i < MaxTextures; ++i) {
     if (!info.sampledTextures.test(i)) {

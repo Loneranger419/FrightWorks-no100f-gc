@@ -1,14 +1,18 @@
 #include "hle_stubs.h"
 #include "memory.h"
 #include "hle/controller_status_contract.h"
+#include "hle/no100f_pad_actions.h"
+#include "hle/no100f_xbox_layout.h"
 #include "input_bindings.h"
 #include "wii_remote_input.h"
+#include "runtime_config.h"
 #include "runtime_log.h"
 
 #include <aurora/aurora.h>
 #include <SDL3/SDL_gamepad.h>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstdio>
 #include <cstdint>
@@ -21,6 +25,19 @@
 namespace {
 
 std::atomic<bool> g_rumbleEnabled{true};
+
+// Original Xbox controls (hle/no100f_xbox_layout.h), applied to each controller's mapped buttons inside PADRead.
+std::array<No100fXboxLayout::PortState, PAD_CHANMAX> g_xboxPorts;
+bool g_xboxMenu = false;
+
+u16 XboxLayoutFilter(u32 port, SDL_Gamepad* gamepad, u16 buttons) {
+    if (port >= g_xboxPorts.size()) {
+        return buttons;
+    }
+    return No100fXboxLayout::Filter(g_xboxPorts[port], buttons, g_xboxMenu,
+                                    SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER),
+                                    SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER));
+}
 
 bool NativeButtonHeld(SDL_Gamepad* gamepad, uint32_t nativeButton) {
     if (gamepad == nullptr || nativeButton == PAD_NATIVE_BUTTON_INVALID ||
@@ -98,6 +115,15 @@ extern "C" void PAD_HLE_SetRumbleEnabled(bool enabled)
     g_rumbleEnabled.store(enabled, std::memory_order_relaxed);
 }
 
+void No100fPad::XboxButtons(uint32_t port, bool& black, bool& white)
+{
+    black = white = false;
+    if (port < g_xboxPorts.size()) {
+        black = g_xboxPorts[port].black;
+        white = g_xboxPorts[port].white;
+    }
+}
+
 extern "C" uint32_t PAD__Init_HLE()
 {
     return PADInit() ? 1u : 0u;
@@ -115,13 +141,26 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     PADStatus statuses[PAD_CHANMAX]{};
     // Keep looking for a Bluetooth Wii Remote that dropped out (or was turned on late).
     WiiRemoteInput::Poll();
-    uint32_t rumbleMask = PADRead(statuses);
+    const bool xboxLayout = RuntimeConfigFile::XboxOriginalLayout();
+    if (xboxLayout) {
+        const uint32_t scenePtr = Memory::Read32(No100fXboxLayout::kScenePointer);
+        const uint32_t sceneAddress = scenePtr + No100fXboxLayout::kSceneIdOffset;
+        const uint32_t scene = scenePtr && Memory::Contains(sceneAddress, 4) ? Memory::Read32(sceneAddress) : 0;
+        const uint32_t mode = Memory::Read32(No100fXboxLayout::kModeAddress);
+        g_xboxMenu = No100fXboxLayout::IsMenuMode(mode) || No100fXboxLayout::IsMenuScene(scene);
+        for (auto& port : g_xboxPorts) {
+            port.black = port.white = false;
+        }
+    }
+    uint32_t rumbleMask = xboxLayout ? PADReadWithGamepadButtonFilter(statuses, XboxLayoutFilter) : PADRead(statuses);
     // Wii Remotes reach the game through KPAD, not as GameCube pads. This also
     // applies while input is blocked (overlay open) so the port does not flip
     // between "connected" and "no controller" every time the overlay toggles.
     WiiRemoteInput::HideRemotesFromPad(statuses, PAD_CHANMAX);
 
-    // On-screen button prompts follow the first connected controller (UserData/button_icons, tools/make-button-icons.py).
+    // On-screen button prompts follow the first connected controller (UserData/button_icons, tools/make-button-icons.py);
+    // with the Xbox layout, gameplay uses the B/X-swapped set (style + 3).
+    static int family = -1;
     if (static unsigned n = 0; n++ % 30 == 0) {
         int count = 0, style = -1;
         if (SDL_JoystickID* ids = SDL_GetGamepads(&count)) {
@@ -134,8 +173,9 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
             }
             SDL_free(ids);
         }
-        aurora_set_button_icon_style(style);
+        family = style;
     }
+    aurora_set_button_icon_style(family >= 0 && xboxLayout && !g_xboxMenu ? family + 3 : family);
     FillTriggersHeldByButtons(statuses);
     InputBindings::Apply(statuses);
     if (uint16_t scripted = 0; WiiRemoteInput::ScriptedPadButtons(scripted)) {
