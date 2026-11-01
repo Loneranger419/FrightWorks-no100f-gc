@@ -655,7 +655,7 @@ bool DrawKeyboardSettings(uint32_t port) {
         });
     }
     if (!enabled) return false;
-    ImGui::TextDisabled("Replaces the gamepad on this port. F10 opens settings.");
+    ImGui::TextDisabled("Works together with a gamepad on this port. F10 opens settings.");
     if (ImGui::Button("Use WASD + mouse preset") || usePreset) {
         const std::array<int, PAD_BUTTON_COUNT> keys = {
             PAD_KEY_MOUSE_LEFT, SDL_SCANCODE_SPACE, SDL_SCANCODE_E, SDL_SCANCODE_Q,
@@ -823,9 +823,36 @@ void DrawXboxButtonSettings() {
     Hint("The chosen pad button sends only Black or White. Hints in the game name it from the next level load.");
 }
 
+void DrawGamepadSettings(uint32_t selectedGamePort);
+
+// Controls page: the port, then its gamepad and its keyboard in two sections of their own. Both drive the same port
+// at the same time (aurora PADRead adds the keys on top of the gamepad).
 void DrawControllerSettings() {
-    OverlayTheme::SectionTitle("Controller");
-    OverlayTheme::Hint("Every connected gamepad controls Scooby (player 1), mapped for its type.");
+    using namespace OverlayTheme;
+    SectionTitle("Controls");
+    Hint("Every connected gamepad controls Scooby (player 1), mapped for its type. The keyboard works at the same time.");
+    for (int port = 0; port < PAD_MAX_CONTROLLERS; ++port) {
+        const std::string label = "Port " + std::to_string(port + 1);
+        ImGui::RadioButton(label.c_str(), &g_controllerPort, port);
+        if (port + 1 < PAD_MAX_CONTROLLERS) {
+            ImGui::SameLine();
+        }
+    }
+    static bool keyboardSection = false;
+    const ImVec2 plank(Px(270), Px(40));
+    if (Plank("GAMEPAD##controls", !keyboardSection, plank)) keyboardSection = false;
+    ImGui::SameLine();
+    if (Plank("KEYBOARD AND MOUSE##controls", keyboardSection, plank)) keyboardSection = true;
+    ImGui::Separator();
+    const uint32_t selectedGamePort = static_cast<uint32_t>(g_controllerPort);
+    if (keyboardSection) {
+        DrawKeyboardSettings(selectedGamePort);
+    } else {
+        DrawGamepadSettings(selectedGamePort);
+    }
+}
+
+void DrawGamepadSettings(uint32_t selectedGamePort) {
     // hle/no100f_xbox_layout.h: works on top of the button mapping below, which stays as it is.
     if (bool xboxLayout = RuntimeConfigFile::XboxOriginalLayout();
         OverlayTheme::Toggle("Original Xbox controls", &xboxLayout)) {
@@ -838,19 +865,6 @@ void DrawControllerSettings() {
                        "buttons either way.");
     if (RuntimeConfigFile::XboxOriginalLayout()) {
         DrawXboxButtonSettings();
-    }
-    for (int port = 0; port < PAD_MAX_CONTROLLERS; ++port) {
-        const std::string label = "Port " + std::to_string(port + 1);
-        ImGui::RadioButton(label.c_str(), &g_controllerPort, port);
-        if (port + 1 < PAD_MAX_CONTROLLERS) {
-            ImGui::SameLine();
-        }
-    }
-
-    ImGui::Separator();
-    const uint32_t selectedGamePort = static_cast<uint32_t>(g_controllerPort);
-    if (DrawKeyboardSettings(selectedGamePort)) {
-        return;
     }
     ImGui::Separator();
     const char* currentName = PADGetName(selectedGamePort);
