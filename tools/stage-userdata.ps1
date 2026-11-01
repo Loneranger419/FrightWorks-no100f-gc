@@ -1,5 +1,6 @@
 # Puts the files a game folder needs besides the program into its UserData folder: the built-in HD texture pack
-# (texture_pack\ScoobyHD, kept out of git) and the button prompt icons (tools\make-button-icons.py).
+# (texture_pack\ScoobyHD, kept out of git, downloaded when missing) and the button prompt icons
+# (tools\make-button-icons.py).
 #   powershell -ExecutionPolicy Bypass -File tools\stage-userdata.ps1 -UserData <folder> [-Required]
 # Used by build-no100f.ps1 (Play\UserData, after every build) and package-scooby.ps1 (the release). Only what changed
 # is copied or rebuilt. -Required (packaging) stops on anything missing; without it a missing piece is a warning, so a
@@ -15,8 +16,53 @@ function Fail([string]$Text) {
 
 New-Item -ItemType Directory -Force $UserData | Out-Null
 
-# 1. HD texture pack: a mirror of texture_pack\ScoobyHD (other packs in texture_replacements are left alone).
+# 1. HD texture pack. texture_pack\ScoobyHD (git-ignored) = dogerki's pack, downloaded from the Internet Archive the
+# first time, plus tools\hd-pack-additions\ScoobyHD on top. UserData gets a mirror of it (other packs in
+# texture_replacements are left alone).
 $packSource = Join-Path $root 'texture_pack\ScoobyHD'
+$packUrl = 'https://archive.org/download/dolphin-scooby-doo-night-of-100-frights-hd-texture-pack/' +
+           'Dolphin%20Scooby%20Doo%20Night%20of%20100%20Frights%20HD%20Texture%20Pack.rar'
+$packSha1 = '1E55E7F802BD0E5AD00538FB21D17A66417F723B'
+if (-not (Test-Path -LiteralPath $packSource)) {
+    $rar = Join-Path $root 'texture_pack\ScoobyHD.rar'
+    $unpack = Join-Path $root 'texture_pack\ScoobyHD.unpack'
+    try {
+        New-Item -ItemType Directory -Force (Split-Path $rar) | Out-Null
+        if (-not ((Test-Path -LiteralPath $rar) -and (Get-FileHash -LiteralPath $rar -Algorithm SHA1).Hash -eq $packSha1)) {
+            Write-Host "HD pack: downloading dogerki's HD texture pack (604 MB) from archive.org..."
+            curl.exe -fL --retry 3 -o $rar $packUrl
+            if ($LASTEXITCODE -ne 0) { throw "download failed (curl exit code $LASTEXITCODE)" }
+            if ((Get-FileHash -LiteralPath $rar -Algorithm SHA1).Hash -ne $packSha1) { throw "the download's SHA-1 doesn't match" }
+        }
+        Remove-Item -Recurse -Force $unpack -ErrorAction SilentlyContinue
+        New-Item -ItemType Directory -Force $unpack | Out-Null
+        # RAR5: Windows' tar (libarchive) reads it; 7-Zip if that fails (older Windows 10).
+        & "$env:SystemRoot\System32\tar.exe" -xf $rar -C $unpack
+        if ($LASTEXITCODE -ne 0) {
+            $sevenZip = @(Get-Command 7z -CommandType Application -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source) +
+                        @("$env:ProgramFiles\7-Zip\7z.exe") | Where-Object { Test-Path $_ } | Select-Object -First 1
+            if (-not $sevenZip) { throw "can't unpack the RAR: Windows tar failed and 7-Zip isn't installed" }
+            & $sevenZip x -y "-o$unpack" $rar | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "7-Zip failed to unpack the RAR" }
+        }
+        # The textures sit in one game-ID folder (GIHP78).
+        $folder = Get-ChildItem -LiteralPath $unpack -Directory | Select-Object -First 1
+        if (-not $folder -or -not (Get-ChildItem -LiteralPath $folder.FullName -Filter *.png | Select-Object -First 1)) {
+            throw "no texture folder in the RAR"
+        }
+        Move-Item -LiteralPath $folder.FullName $packSource
+        Remove-Item -Force $rar
+        Write-Host "HD pack: unpacked to $packSource"
+    } catch {
+        Fail "HD pack: $($_.Exception.Message). Download it by hand from $packUrl and put the PNGs in $packSource"
+    } finally {
+        Remove-Item -Recurse -Force $unpack -ErrorAction SilentlyContinue
+    }
+}
+if (Test-Path -LiteralPath $packSource) {
+    robocopy (Join-Path $PSScriptRoot 'hd-pack-additions\ScoobyHD') $packSource /E /NJH /NJS /NFL /NDL /NP /R:1 /W:1 | Out-Null
+    if ($LASTEXITCODE -ge 8) { throw "copying the HD pack additions failed (robocopy exit code $LASTEXITCODE)" }
+}
 $pack = Join-Path $UserData 'texture_replacements\ScoobyHD'
 if (Test-Path -LiteralPath $packSource) {
     New-Item -ItemType Directory -Force $pack | Out-Null

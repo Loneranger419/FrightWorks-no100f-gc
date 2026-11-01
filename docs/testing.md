@@ -34,7 +34,8 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -Skip
 & "Play\FrightWorks Game.exe"
 ```
 
-- Every build also puts the HD texture pack (`texture_pack\ScoobyHD`) and the button prompt icons into `Play\UserData`,
+- Every build also puts the HD texture pack (`texture_pack\ScoobyHD`, downloaded from the Internet Archive by the first
+  build, plus `tools\hd-pack-additions`) and the button prompt icons into `Play\UserData`,
   like a release (`tools\stage-userdata.ps1`; only what changed is copied or rebuilt). The icons need Python and
   ImageMagick; without them the build warns and goes on.
 - `-SkipTools` skips the toolchain and dependency checks (fine once the first build has downloaded them).
