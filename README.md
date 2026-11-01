@@ -59,6 +59,8 @@ powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 -Zip
 The game builds to `Play\`; the package goes to `dist\`. Packaging expects the HD texture pack in
 `texture_pack\ScoobyHD` (not in git).
 
+Tests, playtest sessions and the debug tools (dev menu, logs, scripted input): [`docs/testing.md`](docs/testing.md).
+
 ## Credits
 
 - FrightWorks: Loneranger419

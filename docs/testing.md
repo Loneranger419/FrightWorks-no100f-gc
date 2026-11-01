@@ -1,0 +1,165 @@
+# Testing and dev tools
+
+How to build FrightWorks yourself, run the tests, and use the debug tools to check a change or chase a bug. Everything
+here is Windows 10/11 x64 and PowerShell, run from the repository root.
+
+The tool reference (every script, one line each) is [`tools/debug/README.md`](../tools/debug/README.md); this page is
+the walkthrough.
+
+**Never commit game data:** no disc image, `Disc/`, extracted or dumped files, logs or recordings. `Disc/`, `Play/`,
+`autotest/` and `tools/debug/local/` are git-ignored for that reason.
+
+## 1. One-time setup
+
+You need Python 3 and Git, plus your own **Night of 100 Frights, GameCube USA v1.01 (GIHE78, revision 1)** image. The
+build downloads its own compiler, CMake and Ninja into `toolchain\` the first time.
+
+```powershell
+# Build the launcher and use it to extract your disc image into Disc\DATA
+powershell -ExecutionPolicy Bypass -File tools\build-launcher.ps1
+& "launcher\publish\Scooby-Doo Refrightened Launcher.exe" --extract "C:\path\to\game.iso" Disc\DATA
+
+# First full build of the game (translates main.dol, then compiles) -> Play\
+powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1
+```
+
+The debug scripts also use Python packages: `pip install numpy pillow capstone` (`capstone` is for the disassembly
+tools). Video capture needs ffmpeg on PATH, or run `tools\debug\capture\get-ffmpeg.ps1` once.
+
+## 2. Build and play
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools                  # full build
+powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -SkipTranslate   # faster: native code only
+& "Play\Scooby-Doo Refrightened.exe"
+```
+
+- `-SkipTools` skips the toolchain and dependency checks (fine once the first build has downloaded them).
+- `-SkipTranslate` reuses the translated game code. Only use it when you changed native code (`wiicompiled/runtime`,
+  `wiicompiled/aurora-main`). **Do a full build** (no `-SkipTranslate`) when you add or remove a native override
+  (`PPC_NATIVE_OVERRIDE`), switch to a branch that does, or after any build with a debug patch that adds overrides
+  (the dev menu does). Otherwise the game stops at boot with "Fatal Error" and PC=0.
+- Settings, saves and mods are in `Play\UserData\` (`Config.toml`; in game **F10**, **F11** fullscreen).
+- Packaging a release zip: `tools\package-scooby.ps1 -Build -Zip` → `dist\`. It also needs ImageMagick (`magick`) on
+  PATH and the HD texture pack in `texture_pack\ScoobyHD` (not in git).
+
+## 3. Unit tests
+
+The tests are CMake targets in `wiicompiled/runtime/CMakeLists.txt`; the game build doesn't build them. After a game
+build has created `wiicompiled\native-build`:
+
+```powershell
+$tc = "$PWD\toolchain"; $env:PATH = "$tc\llvm-mingw\bin;$tc\Ninja;$tc\CMake\bin;$env:PATH"
+cmake --build wiicompiled\native-build --parallel          # builds everything, tests included
+ctest --test-dir wiicompiled\native-build --output-on-failure
+```
+
+One test: `cmake --build wiicompiled\native-build --target <name>`, then run `wiicompiled\native-build\<name>.exe`.
+New pure logic (no SDL, no guest memory) belongs in a header with a test next to the existing ones.
+
+## 4. Playtest a level
+
+`tools\debug\manual-session.ps1` opens one game window straight into a level, for looking at a bug and taking
+screenshots.
+
+**It overwrites `Play\UserData\Config.toml`.** Back it up first, and afterwards put it back and delete
+`Play\UserData\mods\zz-manual` (the boot mod it writes). Controller remaps made in F10 during a test are also saved to
+`Play\UserData\<controller name>_<VID>_<PID>.controller`; back that file up too if you change bindings.
+
+```powershell
+Copy-Item Play\UserData\Config.toml tools\debug\local\Config.user.toml   # once: your own settings
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 start -Boot i001 -AllPowerups
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 shot -Label curtains   # -> autotest\manual\
+powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop
+Remove-Item -Recurse Play\UserData\mods\zz-manual
+Copy-Item tools\debug\local\Config.user.toml Play\UserData\Config.toml
+```
+
+- `-Boot <scene>` picks the level (default `e001`); `-AllPowerups` unlocks every gadget; `-HdTextures` turns the HD pack
+  on. Scene IDs, level names and which scenes suit which tests: [`tools/debug/game/levels.md`](../tools/debug/game/levels.md),
+  or `python tools\debug\game\levels.py i004`. Common ones: `h001` (hub, smoke test), `i001`, `i004` (boot it directly),
+  `e001`.
+- `status` shows the running session; `stop-tests` kills leftover automation.
+- Settings not in the generated config: run `start`, then `stop`, add your section to `Config.toml`, and launch the exe
+  yourself (`shot` captures any running game). Example: `tools\debug\holiday-shots.ps1`.
+- Don't run several game windows or level-sweep automation for visual bugs: one window, looked at by a person.
+
+## 5. Dev menu (F8)
+
+The dev menu is a patch (`tools/debug/patches/devmenu.patch`), not part of the game. `play-patched.ps1` applies it,
+builds, starts the game, and takes it out of the source again when you close the game:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\debug\play-patched.ps1              # dev menu
+powershell -ExecutionPolicy Bypass -File tools\debug\play-patched.ps1 -HdTextures  # with the HD pack, like the release
+```
+
+In game, **F8**: current scene and Scooby's position, go to any scene, save spots and go back to them, god mode,
+monsters off (all or one by one), a Textures tab (find a texture, mark it), an Effects tab and a free camera. Spots are
+saved in `Play\UserData\devmenu_spots.txt`. More commands (scripted through `Play\devmenu.txt`) are in the
+`game-logic-debug` skill.
+
+Options: `-Patch devmenu,postool` (several patches), `-CleanBuild` (rebuild `Play\` without the patch afterwards),
+`-Keep` (leave it applied to work on it; re-export the patch afterwards), `-Remove` (take the patches out if the
+window was closed instead of the game), `-SkipTranslate` (only if the last build was from the same branch with the
+same patches), `-NoBuild` (play what's in `Play\`).
+
+A dev-menu build of another branch: `tools\debug\texhunt\build-devmenu.ps1 -Branch <branch>`, then
+`play-patched.ps1 -NoBuild`. If the patch no longer applies on a branch, it needs updating in a debug-kit PR.
+
+**After a dev-menu build, the next normal build must be a full build** (no `-SkipTranslate`), or use `-CleanBuild`.
+
+## 6. Other diagnostic patches
+
+`tools/debug/patches/` holds diagnostics that never go into a fix PR. Apply them with `play-patched.ps1 -Patch <name>`
+(or `git apply`, and `git apply -R` before committing). The table with what each one does is in
+[`.claude/skills/manual-yn-bisect/strip-before-pr.md`](../.claude/skills/manual-yn-bisect/strip-before-pr.md). The most
+useful:
+
+| Patch | What it adds |
+| --- | --- |
+| `devmenu` | F8 dev menu (above) |
+| `postool` | Live memory: write `dump NAME`, `peek ADDR [N]` or `poke ADDR HEX...` lines to `Play\postool.txt` (run every 20 frames, output in `Play\postool\`); **F9** saves Scooby's position to `Play\postool\spots.txt` |
+| `audio-diagnostic` | Per-stage audio dumps (`AX_DIAG_DIR`) |
+| `real-date` | Real clock for old builds that always start on 2000-01-01 |
+
+## 7. Logs, scripted input and other switches
+
+- **Logs**: `Play\UserData\Logs\<time>\console.log`; the newest one shows which level files load (`[dvdread] ...
+  xNNN.HIP`). Runtime messages (`RT_LOGF`) go to stderr: launch with
+  `Start-Process "Play\Scooby-Doo Refrightened.exe" -WorkingDirectory Play -RedirectStandardError err.txt`.
+- **Scripted input** (no controller needed): set `NSMBW_INPUT_SCRIPT` before starting the game, e.g.
+  `$env:NSMBW_INPUT_SCRIPT = '10000:PLUS,12000:DOWN,13500:A'` = press Start at 10 s, D-pad down at 12 s, A at 13.5 s
+  (ms after the game first reads input; optional third field = hold time in ms, default 150). Buttons: `A`, `B`,
+  `PLUS` (Start), `ONE` (X), `TWO` (Y), `MINUS` (Z), `UP`/`DOWN`/`LEFT`/`RIGHT`.
+- **Button prompts**: `$env:BUTTON_ICONS = 'xbox'` (or `playstation`, `nintendo`) forces a prompt set; the sets are
+  built by `python tools\make-button-icons.py --out Play\UserData\button_icons` (needs ImageMagick and the HD pack).
+- **Audio capture**: `$env:AUDIO_RAW_DUMP = 'C:\temp\out.raw'` writes the mixed output; analysis tools in
+  `tools\debug\audio\`.
+- Remove test variables afterwards: `Remove-Item Env:NO100F_*, Env:AX_*, Env:NSMBW_*, Env:AUDIO_*, Env:BUTTON_ICONS -ErrorAction SilentlyContinue`.
+- **Launcher screenshots** without opening it: `& "launcher\publish\Scooby-Doo Refrightened Launcher.exe" --shots <dir>`
+  draws every page to `<dir>\<Page>.png`.
+- **Screen recording**: `tools\debug\capture\record.ps1`.
+
+## 8. Looking at the game's code and data
+
+- `python tools\debug\dol.py func 8000F5E8` disassembles a function of `main.dol`; `callers <addr>`, `dis <addr> <n>`,
+  `name <addr>` (needs `capstone`).
+- `python tools\debug\overrides.py` lists the native overrides (functions the port replaces).
+- `tools\debug\game\addrrefs.py LO HI` finds code that builds an address in a range.
+- `tools\debug\audio\hip.py` lists the assets in a level file (`Disc\DATA\files\*.HIP`).
+- Dolphin is useful as a reference for what the game intends; compare against it rather than copying it.
+
+## 9. Before you open a PR
+
+- Fix-only: minimal diff, no diagnostics (revert any patch: `play-patched.ps1 -Remove -Patch <name>` or `git apply -R`),
+  no unrelated changes, no heuristics that hide a symptom.
+- Run the unit tests, and a full build if you touched overrides.
+- Smoke test: boot `h001` and one level you changed something in.
+- Open it as a draft and say plainly what you tested and what you didn't.
+
+## Claude Code skills
+
+`.claude/skills/` has step-by-step guides that Claude Code loads, readable by anyone: `hle-divergence-debug`
+(graphics and state bugs), `game-logic-debug` (60 fps, timing and gameplay bugs, dev menu, postool),
+`manual-yn-bisect` (yes/no visual bisects, the fix-only PR workflow) and `audio-debug` (crackle, clicks, fuzz).
