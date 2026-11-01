@@ -44,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 start -B
 powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop
 python tools\debug\game\mkhip.py i004 --spot spot1            # spawn there, all NPCs moved off-map (--npc none keeps them)
 #   or: mkhip.py i004 --pos X Y Z --yaw R
-Start-Process 'Play\Scooby-Doo Refrightened.exe' -WorkingDirectory Play   # not manual-session start: it rewrites zz-manual
+Start-Process 'Play\FrightWorks Game.exe' -WorkingDirectory Play   # not manual-session start: it rewrites zz-manual
 ```
 
 - Spots: with `postool.patch` built in, **F9** (global hotkey) appends Scooby's position + yaw to `Play/postool/spots.txt`

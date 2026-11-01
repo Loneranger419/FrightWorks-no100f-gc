@@ -34,7 +34,7 @@ Set-StrictMode -Version 3.0
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path  # this file is tools\debug\manual-session.ps1
 $play = Join-Path $root 'Play'
-$exe = Join-Path $play 'Scooby-Doo Refrightened.exe'
+$exe = Join-Path $play 'FrightWorks Game.exe'
 $outDir = Join-Path $root 'autotest\manual'
 $statePath = Join-Path $outDir 'session.json'
 $disc = Join-Path $root 'Disc\DATA'

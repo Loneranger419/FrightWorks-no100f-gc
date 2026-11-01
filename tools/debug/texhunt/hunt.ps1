@@ -19,7 +19,7 @@ $dump = Join-Path $root 'autotest\audio-loop\hunt.raw'
 New-Item -ItemType Directory -Force (Split-Path $dump) | Out-Null
 $packLink = Join-Path $root 'Play\UserData\texture_replacements\ScoobyHD'
 
-if (Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue) { throw 'the game is running; close it first' }
+if (Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue) { throw 'the game is running; close it first' }
 if ($Branch) {
     # build-devmenu.ps1 builds the branch and comes back to this one (the kit may not exist on that branch)
     "hunt      building $Branch + dev menu"

@@ -21,8 +21,8 @@ try {
     & powershell -ExecutionPolicy Bypass -File $ms start -Boot $Boot | Out-Null  # writes the boot mod + Config
     & powershell -ExecutionPolicy Bypass -File $ms stop | Out-Null
     $t = [DateTime]::Now
-    while ((Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue) -and ([DateTime]::Now - $t).TotalSeconds -lt 15) {
-        Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Stop-Process -Force
+    while ((Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue) -and ([DateTime]::Now - $t).TotalSeconds -lt 15) {
+        Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Stop-Process -Force
         Start-Sleep -Milliseconds 500
     }
     if ($Hd) {
@@ -32,7 +32,7 @@ try {
     }
     Remove-Item (Join-Path $play 'devmenu.txt'), (Join-Path $play 'devmenu.log') -ErrorAction SilentlyContinue
     $env:AUDIO_RAW_DUMP = $dump
-    Start-Process -FilePath (Join-Path $play 'Scooby-Doo Refrightened.exe') -WorkingDirectory $play | Out-Null
+    Start-Process -FilePath (Join-Path $play 'FrightWorks Game.exe') -WorkingDirectory $play | Out-Null
     # wait for the boot scene to load
     $t = [DateTime]::Now
     while (([DateTime]::Now - $t).TotalSeconds -lt 120) {
@@ -48,7 +48,7 @@ try {
         Start-Sleep $Seconds
     }
 } finally {
-    Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Stop-Process -Force
     Remove-Item Env:AUDIO_RAW_DUMP -ErrorAction SilentlyContinue
     Start-Sleep 1
     if (Test-Path $link) { [IO.Directory]::Delete($link, $false) }

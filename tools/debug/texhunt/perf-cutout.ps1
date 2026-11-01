@@ -46,8 +46,8 @@ try {
         }
     }
 } finally {
-    Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
-    if (-not $look.WaitForExit(30000)) { Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Stop-Process -Force; $look.WaitForExit(15000) | Out-Null }
+    Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | ForEach-Object { $_.CloseMainWindow() | Out-Null }
+    if (-not $look.WaitForExit(30000)) { Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Stop-Process -Force; $look.WaitForExit(15000) | Out-Null }
     Get-Content $out | Select-String 'restored' | ForEach-Object Line
     Remove-Item $out -ErrorAction SilentlyContinue
 }

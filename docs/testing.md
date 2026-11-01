@@ -17,7 +17,7 @@ build downloads its own compiler, CMake and Ninja into `toolchain\` the first ti
 ```powershell
 # Build the launcher and use it to extract your disc image into Disc\DATA
 powershell -ExecutionPolicy Bypass -File tools\build-launcher.ps1
-& "launcher\publish\Scooby-Doo Refrightened Launcher.exe" --extract "C:\path\to\game.iso" Disc\DATA
+& "launcher\publish\FrightWorks.exe" --extract "C:\path\to\game.iso" Disc\DATA
 
 # First full build of the game (translates main.dol, then compiles) -> Play\
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1
@@ -31,7 +31,7 @@ tools). Video capture needs ffmpeg on PATH, or run `tools\debug\capture\get-ffmp
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools                  # full build
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -SkipTranslate   # faster: native code only
-& "Play\Scooby-Doo Refrightened.exe"
+& "Play\FrightWorks Game.exe"
 ```
 
 - `-SkipTools` skips the toolchain and dependency checks (fine once the first build has downloaded them).
@@ -135,7 +135,7 @@ useful:
 
 - **Logs**: `Play\UserData\Logs\<time>\console.log`; the newest one shows which level files load (`[dvdread] ...
   xNNN.HIP`). Runtime messages (`RT_LOGF`) go to stderr: launch with
-  `Start-Process "Play\Scooby-Doo Refrightened.exe" -WorkingDirectory Play -RedirectStandardError err.txt`.
+  `Start-Process "Play\FrightWorks Game.exe" -WorkingDirectory Play -RedirectStandardError err.txt`.
 - **Scripted input** (no controller needed): set `NSMBW_INPUT_SCRIPT` before starting the game, e.g.
   `$env:NSMBW_INPUT_SCRIPT = '10000:PLUS,12000:DOWN,13500:A'` = press Start at 10 s, D-pad down at 12 s, A at 13.5 s
   (ms after the game first reads input; optional third field = hold time in ms, default 150). Buttons: `A`, `B`,
@@ -145,7 +145,7 @@ useful:
 - **Audio capture**: `$env:AUDIO_RAW_DUMP = 'C:\temp\out.raw'` writes the mixed output; analysis tools in
   `tools\debug\audio\`.
 - Remove test variables afterwards: `Remove-Item Env:NO100F_*, Env:AX_*, Env:NSMBW_*, Env:AUDIO_*, Env:BUTTON_ICONS -ErrorAction SilentlyContinue`.
-- **Launcher screenshots** without opening it: `& "launcher\publish\Scooby-Doo Refrightened Launcher.exe" --shots <dir>`
+- **Launcher screenshots** without opening it: `& "launcher\publish\FrightWorks.exe" --shots <dir>`
   draws every page to `<dir>\<Page>.png`.
 - **Screen recording**: `tools\debug\capture\record.ps1`.
 
