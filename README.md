@@ -22,6 +22,7 @@ ports of the other console versions may follow.
 - Restored Creeper window animation in Mystic Manor's Mystery Machine courtyard
 - Built-in HD texture pack (can be switched off)
 - Gamepads and keyboard, remappable; button prompts match your Xbox, PlayStation or Nintendo controller
+  and follow remapped face buttons
 - Optional original Xbox controls: X head smash, B dig / talk and back in menus, LB soap bubble, RB sneak (together with
   the triggers, as on the Xbox); the button prompts and tutorial hints follow (launcher **Controls** page or **F10** >
   Controls, where Black and White can also go on other buttons). The launcher detects an Xbox controller and asks once
@@ -71,8 +72,10 @@ powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1
 powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 -Zip
 ```
 
-The game builds to `Play\`; the package goes to `dist\`. Packaging expects the HD texture pack in
-`texture_pack\ScoobyHD` (not in git).
+The game builds to `Play\`; the package goes to `dist\`. The first build downloads dogerki's HD texture pack
+(604 MB, from the [Internet Archive](https://archive.org/details/dolphin-scooby-doo-night-of-100-frights-hd-texture-pack))
+into `texture_pack\ScoobyHD` (not in git) and adds the HD Creeper frames from `tools\hd-pack-additions`. Every build
+copies the pack and the button prompt icons into `Play\UserData`; the icons need Python and ImageMagick.
 
 Tests, playtest sessions and the debug tools (dev menu, logs, scripted input): [`docs/testing.md`](docs/testing.md).
 

@@ -2258,9 +2258,13 @@ int aurora_get_cutout_mode() {
 #endif
 }
 void aurora_set_metalfx_spatial(bool enabled) { aurora::g_metalfxRequested.store(enabled); }
-void aurora_set_button_icon_style(int style) {
+void aurora_set_button_icons(int family, const char* const buttons[4]) {
 #ifdef AURORA_ENABLE_GX
-  aurora::gfx::texture_replacement::set_button_icon_style(style);
+  aurora::gfx::texture_replacement::ButtonIcons icons{.family = family};
+  for (size_t i = 0; buttons != nullptr && i < icons.buttons.size(); ++i) {
+    if (buttons[i] != nullptr) icons.buttons[i] = buttons[i];
+  }
+  aurora::gfx::texture_replacement::set_button_icons(icons);
 #endif
 }
 bool aurora_texture_replacement_used(const char* name) {

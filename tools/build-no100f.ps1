@@ -16,6 +16,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
 $root = Split-Path -Parent $PSScriptRoot            # <project>\tools -> <project>
+$userPath = $env:PATH                               # step 3 scrubs PATH; staging Play\UserData needs Python + magick
 $wc = Join-Path $root 'wiicompiled'
 $toolchain = Join-Path $root 'toolchain'
 $logs = Join-Path $root 'build-logs'
@@ -134,4 +135,8 @@ Copy-Item -LiteralPath (Join-Path $build 'WiiCompiled.exe') -Destination $playEx
 Get-ChildItem -LiteralPath $build -File | Where-Object { $_.Extension -eq '.dll' -or $_.Name -eq 'dsp_coef.bin' } |
     Copy-Item -Destination (Join-Path $root 'Play') -Force
 Set-Status 'copied to Play\FrightWorks Game.exe (+ runtime DLLs)'
+# Like a release: the HD pack and the button prompt icons in Play\UserData (only what changed is copied or rebuilt).
+$env:PATH = $userPath
+& (Join-Path $PSScriptRoot 'stage-userdata.ps1') -UserData (Join-Path $root 'Play\UserData')
+Set-Status 'Play\UserData: HD pack + button icons staged'
 
