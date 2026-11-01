@@ -797,6 +797,16 @@ void DrawRumbleSettings() {
 void DrawControllerSettings() {
     OverlayTheme::SectionTitle("Controller");
     OverlayTheme::Hint("Every connected gamepad controls Scooby (player 1), mapped for its type.");
+    // hle/no100f_xbox_layout.h: works on top of the button mapping below, which stays as it is.
+    if (bool xboxLayout = RuntimeConfigFile::XboxOriginalLayout();
+        OverlayTheme::Toggle("Original Xbox controls", &xboxLayout)) {
+        RuntimeConfigFile::SetXboxOriginalLayout(xboxLayout);
+    }
+    OverlayTheme::Hint("On: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display, LT gum, "
+                       "RT run, LB soap bubble (Xbox White), RB sneak (Xbox Black), Start pause; the bumpers work together "
+                       "with the triggers. The hints say so too from the next level load. Off (GameCube): B head smash and "
+                       "back, X dig, Z + L bubble, Z + R sneak. Gamepads only; the button mapping below stays in GameCube "
+                       "buttons either way.");
     for (int port = 0; port < PAD_MAX_CONTROLLERS; ++port) {
         const std::string label = "Port " + std::to_string(port + 1);
         ImGui::RadioButton(label.c_str(), &g_controllerPort, port);
@@ -872,7 +882,9 @@ void DrawControllerSettings() {
     }
 
     OverlayTheme::SectionTitle("Presets");
-    if (ImGui::Button("GameCube")) {
+    // GameCube and Original Xbox both restore the default mapping; Original Xbox then switches the layout on.
+    const auto restoreDefaults = [&](bool xboxLayout) {
+        RuntimeConfigFile::SetXboxOriginalLayout(xboxLayout);
         const uint32_t port = static_cast<uint32_t>(g_controllerPort);
         PADRestoreDefaultMapping(port);
         uint32_t restoredCount = 0;
@@ -889,6 +901,13 @@ void DrawControllerSettings() {
         altRowExpanded.fill(false);
         PADSerializeMappings();
         mappings = PADGetButtonMappings(port, &mappingCount);
+    };
+    if (ImGui::Button("GameCube")) {
+        restoreDefaults(false);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Original Xbox")) {
+        restoreDefaults(true);
     }
     const auto applyPreset = [&](const std::array<const char*, PAD_BUTTON_COUNT>& preset) {
         const uint32_t port = static_cast<uint32_t>(g_controllerPort);

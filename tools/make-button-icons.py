@@ -1,9 +1,11 @@
-"""Builds the per-controller button prompt textures (Play/UserData/button_icons/<xbox|playstation|nintendo>).
+"""Builds the per-controller button prompt textures (Play/UserData/button_icons/<xbox|playstation|nintendo>[_original]).
 
 The game's GameCube button picture (one atlas: Y, X, A, B) is redrawn with the matching buttons from Kenney's Input
 Prompts (CC0, tools/button-art), each in its own spot so the game's texture coordinates still pick the right one, and
 saved at the HD pack's size under the game texture's name. Aurora loads the set for the controller in use
 (texture_replacement.cpp, hle/input/pad.cpp). GameCube buttons map by position: A south, B east, X west, Y north.
+The *_original sets swap B and X, for the original Xbox controls in gameplay (hle/no100f_xbox_layout.h). Every icon is
+drawn at the size of the biggest button (A), centred where the GameCube button is; the GameCube B button is smaller.
 
     python tools/make-button-icons.py [--out Play/UserData/button_icons]
 Needs ImageMagick (magick) to render the SVGs, and the HD pack in texture_pack/ScoobyHD for the layout.
@@ -24,6 +26,7 @@ STYLES = {
                     "X": "playstation_button_color_square", "Y": "playstation_button_color_triangle"},
     "nintendo": {"A": "switch_button_b", "B": "switch_button_a", "X": "switch_button_y", "Y": "switch_button_x"},
 }
+STYLES.update({f"{style}_original": dict(buttons, B=buttons["X"], X=buttons["B"]) for style, buttons in list(STYLES.items())})
 
 
 def regions(img):
@@ -58,13 +61,18 @@ def main():
     a = ap.parse_args()
     base = Image.open(os.path.join(ROOT, "texture_pack", "ScoobyHD", ATLAS)).convert("RGBA")
     boxes = regions(base)
+    size = max(min(x1 - x0, y1 - y0) for x0, y0, x1, y1 in boxes.values())
     with tempfile.TemporaryDirectory() as tmp:
         for style, buttons in STYLES.items():
+            family = style.split("_")[0]
             atlas = Image.new("RGBA", base.size, (0, 0, 0, 0))
             for name, (x0, y0, x1, y1) in boxes.items():
-                size = min(x1 - x0, y1 - y0)
-                icon = render_svg(os.path.join(ART, style, buttons[name] + ".svg"), size, tmp, style == "nintendo")
-                atlas.alpha_composite(icon, ((x0 + x1 - icon.width) // 2, (y0 + y1 - icon.height) // 2))
+                icon = render_svg(os.path.join(ART, family, buttons[name] + ".svg"), size, tmp, family == "nintendo")
+                # Centred on the GameCube button, but kept inside its quarter of the atlas.
+                qx, qy = x0 // (base.width // 2) * (base.width // 2), y0 // (base.height // 2) * (base.height // 2)
+                left = min(max((x0 + x1 - icon.width) // 2, qx), qx + base.width // 2 - icon.width)
+                top = min(max((y0 + y1 - icon.height) // 2, qy), qy + base.height // 2 - icon.height)
+                atlas.alpha_composite(icon, (left, top))
             os.makedirs(os.path.join(a.out, style), exist_ok=True)
             atlas.save(os.path.join(a.out, style, ATLAS))
             print("wrote", os.path.join(a.out, style, ATLAS))
