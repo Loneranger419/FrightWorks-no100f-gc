@@ -1,8 +1,8 @@
 diff --git a/wiicompiled/aurora-main/include/aurora/aurora.h b/wiicompiled/aurora-main/include/aurora/aurora.h
-index 335b271..5128dff 100644
+index 5ecfc95..8773b00 100644
 --- a/wiicompiled/aurora-main/include/aurora/aurora.h
 +++ b/wiicompiled/aurora-main/include/aurora/aurora.h
-@@ -204,6 +204,15 @@ bool aurora_get_metalfx_spatial();
+@@ -209,6 +209,15 @@ bool aurora_get_metalfx_spatial();
  bool aurora_is_metalfx_spatial_supported();
  // Button prompt textures for the controller in use: 0 xbox, 1 playstation, 2 nintendo, -1 the game's own.
  void aurora_set_button_icon_style(int style);
@@ -19,10 +19,10 @@ index 335b271..5128dff 100644
  
  AuroraBackend aurora_get_backend();
 diff --git a/wiicompiled/aurora-main/lib/aurora.cpp b/wiicompiled/aurora-main/lib/aurora.cpp
-index 07e9e18..e0cf74c 100644
+index 28a65e0..68af177 100644
 --- a/wiicompiled/aurora-main/lib/aurora.cpp
 +++ b/wiicompiled/aurora-main/lib/aurora.cpp
-@@ -2201,6 +2201,28 @@ void aurora_set_button_icon_style(int style) {
+@@ -2263,6 +2263,28 @@ void aurora_set_button_icon_style(int style) {
    aurora::gfx::texture_replacement::set_button_icon_style(style);
  #endif
  }
@@ -2264,7 +2264,7 @@ index 0000000..35d356e
 +}
 +PPC_NATIVE_OVERRIDE_VOID(80168C78, No100f_DevmenuCameraBeginUpdate, (CpuContext* ctx), (ctx));
 diff --git a/wiicompiled/runtime/src/settings_overlay.cpp b/wiicompiled/runtime/src/settings_overlay.cpp
-index 81eb3ac..5b83a1b 100644
+index 94057f1..36fe1d9 100644
 --- a/wiicompiled/runtime/src/settings_overlay.cpp
 +++ b/wiicompiled/runtime/src/settings_overlay.cpp
 @@ -7,6 +7,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
@@ -2275,7 +2275,7 @@ index 81eb3ac..5b83a1b 100644
  #include "audio_backend.h"
  #include "aurora_events.h"
  #include "controller_button_names.h"
-@@ -1744,8 +1745,8 @@ bool IsMouseActivity(const SDL_Event& event) {
+@@ -1815,8 +1816,8 @@ bool IsMouseActivity(const SDL_Event& event) {
  // Runs on the thread that pumps SDL events (the same one that calls Draw), so
  // the SDL cursor calls are safe here.
  void UpdateCursorAutoHide() {
@@ -2286,7 +2286,7 @@ index 81eb3ac..5b83a1b 100644
      if (shouldHide == g_cursorHidden) {
          return;
      }
-@@ -1774,7 +1775,7 @@ void PersistDisplayModeIfChanged() {
+@@ -1845,7 +1846,7 @@ void PersistDisplayModeIfChanged() {
  
  void ApplyInputBlockState() {
      const bool blocked = controller_mapping_wizard::IsActive() || g_rebind.active ||
@@ -2295,7 +2295,7 @@ index 81eb3ac..5b83a1b 100644
      PADBlockInput(blocked);
      InputBindings::SetInputBlocked(blocked);
  }
-@@ -1827,6 +1828,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
+@@ -1898,6 +1899,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
              continue;
          }
          controller_mapping_wizard::HandleSdlEvent(ev->sdl);
@@ -2303,9 +2303,9 @@ index 81eb3ac..5b83a1b 100644
          if (g_rebind.active && (IsToggleKey(ev->sdl, SDL_SCANCODE_BACKSPACE) ||
                                  IsToggleKey(ev->sdl, SDL_SCANCODE_DELETE))) {
              CompleteRebind(g_rebind.kind == RebindKind::Controller ? PAD_NATIVE_BUTTON_DISABLED
-@@ -1964,6 +1966,7 @@ void Draw() noexcept {
-     NetplayUi::Draw();
+@@ -2042,6 +2044,7 @@ void Draw() noexcept {
      DrawFpsOverlay();
+     DrawNotice();
      DrawTopBar();
 +    no100f_devmenu::Draw();
      DrawExitPrompt();
