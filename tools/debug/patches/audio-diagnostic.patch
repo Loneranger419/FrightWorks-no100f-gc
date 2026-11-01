@@ -1,0 +1,186 @@
+diff --git a/wiicompiled/runtime/src/audio_backend.cpp b/wiicompiled/runtime/src/audio_backend.cpp
+index 7ceda4c..a72d49a 100644
+--- a/wiicompiled/runtime/src/audio_backend.cpp
++++ b/wiicompiled/runtime/src/audio_backend.cpp
+@@ -127,6 +127,12 @@ bool AudioBackend::QueueHasCapacityLocked(int incomingBytes) {
+         // stream creates an audible discontinuity (the severe crackle seen when
+         // VI-batched DMA briefly outran playback).
+         // A drop is audible; report the first one so it is not invisible.
++        // NO100F audio diagnostic (env AX_DIAG_DIR): report every drop, not just the first.
++        if (static const bool diag = std::getenv("AX_DIAG_DIR") != nullptr; diag) {
++            static unsigned drops = 0;
++            RT_LOG(RT_TAG_AUDIO) << "[drop] #" << ++drops << " queued " << queued << "/" << maxQueued << " incoming "
++                                 << incomingBytes << std::endl;
++        }
+         if (!m_reportedDroppedBlock) {
+             m_reportedDroppedBlock = true;
+             RT_LOG(RT_TAG_AUDIO) << "output queue full (" << queued << "/" << maxQueued
+diff --git a/wiicompiled/runtime/src/hle/audio/ax_mix.cpp b/wiicompiled/runtime/src/hle/audio/ax_mix.cpp
+index 7f54eaf..21b511b 100644
+--- a/wiicompiled/runtime/src/hle/audio/ax_mix.cpp
++++ b/wiicompiled/runtime/src/hle/audio/ax_mix.cpp
+@@ -28,6 +28,7 @@
+ #include <mutex>
+ #include <string>
+ #include <thread>
++#include <unordered_map>
+ 
+ namespace AxDspHle {
+ namespace {
+@@ -731,6 +732,8 @@ private:
+             const uint32_t base = initAddr + static_cast<uint32_t>(i * 6);
+             const int32_t value = static_cast<int32_t>(Hilo(MixRead16(base), MixRead16(base + 2)));
+             const int16_t delta = static_cast<int16_t>(MixRead16(base + 4));
++            if (m_diag.events && value != 0)
++                std::fprintf(m_diag.events, "%llu S bus %zu init %d delta %d\n", (unsigned long long)m_diag.frame, i, value, delta);
+             for (uint32_t j = 0; j < kGcAxSamplesPerFrame; ++j) {
+                 GcBus(i)[j] = value == 0 ? 0 : value + static_cast<int32_t>(j) * delta;
+             }
+@@ -765,6 +768,23 @@ private:
+ 
+     void GcOutputSamples(uint32_t lrAddr, uint32_t surroundAddr) {
+         WriteGuestS32Buffer(surroundAddr, GcBus(kGcMainS), kGcAxSamplesPerFrame);
++        if (m_diag.headroom != 1.f)
++            for (size_t bus : {kGcMainL, kGcMainR})
++                for (uint32_t i = 0; i < kGcAxSamplesPerFrame; ++i)
++                    GcBus(bus)[i] = static_cast<int>(static_cast<float>(GcBus(bus)[i]) * m_diag.headroom);
++        if (m_diag.bus) {
++            std::array<int32_t, kGcAxSamplesPerFrame * 2> lr{};
++            for (uint32_t i = 0; i < kGcAxSamplesPerFrame; ++i) {
++                lr[i * 2] = GcBus(kGcMainL)[i];
++                lr[i * 2 + 1] = GcBus(kGcMainR)[i];
++            }
++            std::fwrite(lr.data(), sizeof(int32_t), lr.size(), m_diag.bus);
++        }
++        // Flush about once a second so a killed game keeps its tail.
++        if (m_diag.bus && m_diag.frame % 200 == 0)
++            for (FILE* f : {m_diag.bus, m_diag.events, m_diag.stream, m_diag.streamPos, m_diag.streamSrc})
++                if (f) std::fflush(f);
++        ++m_diag.frame;
+         // Night of 100 Frights plays its movies at Bink volume 53230 (+4 dB) over audio mastered near full scale, so
+         // the mix overshoots 16 bits and hard clipping crackles. Bend the top quarter instead of cutting it off.
+         const auto limit = [](int32_t x) -> int16_t {
+@@ -859,6 +879,45 @@ private:
+             if (pb.running == 1) {
+                 ++m_gcVoicesThisList;
+             }
++            const uint16_t diagPrev = m_diag.events ? m_diag.running[pbAddr] : 0;
++            if (m_diag.events && pb.running == 1 && diagPrev != 1)
++                std::fprintf(m_diag.events,
++                             "%llu B pb %08X fmt %u loop %u stream %u src %u env %d+%d ctrl %04X mainL %u+%d mainR %u+%d "
++                             "cur %08X end %08X yn %d,%d dpop %d,%d\n",
++                             (unsigned long long)m_diag.frame, pbAddr, pb.audio_addr.sample_format, pb.audio_addr.looping,
++                             pb.is_stream, pb.src_type, pb.vol_env.cur_volume, pb.vol_env.cur_volume_delta, pb.mixer_control,
++                             pb.mixer.main_left.volume, (int16_t)pb.mixer.main_left.volume_delta, pb.mixer.main_right.volume,
++                             (int16_t)pb.mixer.main_right.volume_delta,
++                             Hilo(pb.audio_addr.cur_addr_hi, pb.audio_addr.cur_addr_lo),
++                             Hilo(pb.audio_addr.end_addr_hi, pb.audio_addr.end_addr_lo), (int16_t)pb.adpcm.yn1,
++                             (int16_t)pb.adpcm.yn2, pb.dpop.main_left, pb.dpop.main_right);
++            if (m_diag.events && pb.running == 1 && pb.is_stream == 1) {
++                // C: the stream voice's ADPCM coefficient table and the first ARAM bytes at its loop address, every
++                // time the table changes (checks the decoder against the disc's DSP header).
++                static std::unordered_map<uint32_t, std::array<int16_t, 16>> lastCoefs;
++                std::array<int16_t, 16> c{};
++                for (int i = 0; i < 16; ++i) c[i] = static_cast<int16_t>(pb.adpcm.coefs[i]);
++                if (lastCoefs[pbAddr] != c) {
++                    lastCoefs[pbAddr] = c;
++                    std::fprintf(m_diag.events, "%llu C pb %08X coefs", (unsigned long long)m_diag.frame, pbAddr);
++                    for (int16_t v : c) std::fprintf(m_diag.events, " %d", v);
++                    const uint32_t loop = Hilo(pb.audio_addr.loop_addr_hi, pb.audio_addr.loop_addr_lo) & ~15u;
++                    std::fprintf(m_diag.events, " aram@%08X", loop >> 1);
++                    for (uint32_t i = 0; i < 16; ++i) std::fprintf(m_diag.events, " %02X", ReadAramByte((loop >> 1) + i));
++                    std::fprintf(m_diag.events, "\n");
++                }
++            }
++            if (m_diag.events && pb.running != 1 && diagPrev == 1)
++                std::fprintf(m_diag.events, "%llu K pb %08X dpop main %d,%d auxA %d,%d auxB %d,%d vol main %u,%u\n",
++                             (unsigned long long)m_diag.frame, pbAddr, pb.dpop.main_left, pb.dpop.main_right,
++                             pb.dpop.auxA_left, pb.dpop.auxA_right, pb.dpop.auxB_left, pb.dpop.auxB_right,
++                             pb.mixer.main_left.volume, pb.mixer.main_right.volume);
++            if (m_diag.streamPos && pb.running == 1 && pb.is_stream == 1)
++                std::fprintf(m_diag.streamPos, "%llu %08X cur %08X loop %08X end %08X ratio %08X yn %d,%d ps %02X\n",
++                             (unsigned long long)m_diag.frame, pbAddr, Hilo(pb.audio_addr.cur_addr_hi, pb.audio_addr.cur_addr_lo),
++                             Hilo(pb.audio_addr.loop_addr_hi, pb.audio_addr.loop_addr_lo),
++                             Hilo(pb.audio_addr.end_addr_hi, pb.audio_addr.end_addr_lo), Hilo(pb.src.ratio_hi, pb.src.ratio_lo),
++                             (int16_t)pb.adpcm.yn1, (int16_t)pb.adpcm.yn2, pb.adpcm.pred_scale);
+             uint32_t updateStart = 0;
+             for (uint32_t ms = 0; ms < 5; ++ms) {
+                 // Dolphin ApplyUpdatesForMs: a sub-frame's updates land before it is mixed.
+@@ -872,7 +931,26 @@ private:
+                     }
+                 }
+                 updateStart += count;
++                const uint16_t wasRunning = pb.running;
+                 GcProcessVoice(pb, ms * kSamplesPerMs, kSamplesPerMs, GcConvertMixerControl(pb.mixer_control));
++                if (m_diag.events && wasRunning == 1 && pb.running != 1)
++                    std::fprintf(m_diag.events, "%llu E pb %08X ms %u dpop main %d,%d auxA %d,%d auxB %d,%d vol main %u,%u\n",
++                                 (unsigned long long)m_diag.frame, pbAddr, ms, pb.dpop.main_left, pb.dpop.main_right,
++                                 pb.dpop.auxA_left, pb.dpop.auxA_right, pb.dpop.auxB_left, pb.dpop.auxB_right,
++                                 pb.mixer.main_left.volume, pb.mixer.main_right.volume);
++            }
++            if (m_diag.events) m_diag.running[pbAddr] = pb.running;
++            // Stream wrapped this frame: compare the PB's loop predictor/scale with the header byte now in ARAM at the loop.
++            if (m_diag.streamPos && pb.is_stream == 1 && pb.audio_addr.looping) {
++                const uint32_t loop = Hilo(pb.audio_addr.loop_addr_hi, pb.audio_addr.loop_addr_lo) & 0x3fffffffu;
++                const uint32_t cur = Hilo(pb.audio_addr.cur_addr_hi, pb.audio_addr.cur_addr_lo) & 0x3fffffffu;
++                uint32_t& last = m_diag.streamCur[pbAddr];
++                if (last && cur < last)
++                    std::fprintf(m_diag.streamPos, "%llu WRAP %08X loop_ps %02X aram_ps %02X loop_yn %d,%d cur %08X\n",
++                                 (unsigned long long)m_diag.frame, pbAddr, pb.adpcm_loop_info.pred_scale & 0x7f,
++                                 ReadAramByte((loop & ~15u) >> 1) & 0x7f, (int16_t)pb.adpcm_loop_info.yn1,
++                                 (int16_t)pb.adpcm_loop_info.yn2, cur);
++                last = cur;
+             }
+             GcWritePB(pbAddr, pb);
+             pbAddr = Hilo(pb.next_pb_hi, pb.next_pb_lo);
+@@ -894,10 +972,17 @@ private:
+         AcceleratorT<AXPBGc> accel;
+         accel.Setup(&pb);
+         std::array<int16_t, 32> samples{};
++        FILE* const srcDump = pb.is_stream == 1 ? m_diag.streamSrc : nullptr;
+         pb.src.cur_addr_frac = static_cast<uint16_t>(ResampleAudio(
+-            [&accel](uint32_t) { return accel.ReadSample(); }, samples.data(), count, pb.src.last_samples,
++            [&accel, srcDump](uint32_t) {
++                const int16_t s = accel.ReadSample();
++                if (srcDump) std::fwrite(&s, sizeof(s), 1, srcDump);
++                return s;
++            },
++            samples.data(), count, pb.src.last_samples,
+             pb.src.cur_addr_frac, Hilo(pb.src.ratio_hi, pb.src.ratio_lo), pb.src_type,
+             VoiceCoefficients(BaseCoefficients(), pb.coef_select)));
++        if (m_diag.stream && pb.is_stream == 1) std::fwrite(samples.data(), sizeof(int16_t), count, m_diag.stream);
+         for (uint32_t i = 0; i < count; ++i) {
+             // The envelope volume is signed on GameCube.
+             samples[i] = ClampS16((static_cast<int32_t>(samples[i]) * pb.vol_env.cur_volume) >> 15);
+@@ -1818,6 +1903,31 @@ private:
+     uint32_t m_gcPeakVoices = 0;
+     uint32_t m_gcListCount = 0;
+ 
++    // NO100F audio diagnostic (env AX_DIAG_DIR=<dir>): bus.raw = MAIN L/R before the output limiter (LE int32 pairs,
++    // 160 per frame), events.txt = SETUP depop values and voice start/stop, keyed by frame (sample = frame * 160).
++    // AX_HEADROOM_DB=<n> scales MAIN L/R by -n dB before the limiter (A/B for overload).
++    struct GcDiag {
++        FILE* bus = nullptr;
++        FILE* events = nullptr;
++        FILE* stream = nullptr;     // stream.raw: is_stream voice samples after SRC, before volume (LE int16 mono)
++        FILE* streamPos = nullptr;  // stream_pos.txt: frame, PB, cur/loop/end address and SRC ratio at frame start
++        FILE* streamSrc = nullptr;  // stream_src.raw: is_stream voice samples as decoded, before SRC (LE int16, source rate)
++        uint64_t frame = 0;
++        float headroom = 1.f;
++        std::unordered_map<uint32_t, uint16_t> running;  // PB address -> running after it was last processed
++        std::unordered_map<uint32_t, uint32_t> streamCur;  // stream PB address -> cur address after the last frame
++        GcDiag() {
++            if (const char* dir = std::getenv("AX_DIAG_DIR")) {
++                bus = std::fopen((std::string(dir) + "/bus.raw").c_str(), "wb");
++                events = std::fopen((std::string(dir) + "/events.txt").c_str(), "w");
++                stream = std::fopen((std::string(dir) + "/stream.raw").c_str(), "wb");
++                streamPos = std::fopen((std::string(dir) + "/stream_pos.txt").c_str(), "w");
++                streamSrc = std::fopen((std::string(dir) + "/stream_src.raw").c_str(), "wb");
++            }
++            if (const char* db = std::getenv("AX_HEADROOM_DB")) headroom = std::pow(10.f, -std::atof(db) / 20.f);
++        }
++    } m_diag;
++
+     // Mix worker handshake.
+     std::thread m_mixThread;
+     mutable std::mutex m_mixMutex;

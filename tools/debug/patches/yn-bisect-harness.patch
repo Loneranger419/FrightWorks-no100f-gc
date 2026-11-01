@@ -1,0 +1,2041 @@
+diff --git a/wiicompiled/aurora-main/lib/gfx/common.cpp b/wiicompiled/aurora-main/lib/gfx/common.cpp
+index 3a43a39..e151c19 100644
+--- a/wiicompiled/aurora-main/lib/gfx/common.cpp
++++ b/wiicompiled/aurora-main/lib/gfx/common.cpp
+@@ -19,10 +19,17 @@
+ #include <atomic>
+ #include <chrono>
+ #include <cmath>
++#include <cstdio>
+ #include <cstdlib>
++#include <cstring>
++#if defined(_WIN32)
++#include <share.h>
++#endif
+ #include <memory>
+ #include <mutex>
+ #include <optional>
++#include <string>
++#include <vector>
+ 
+ #include <absl/container/flat_hash_map.h>
+ #include <magic_enum.hpp>
+@@ -502,7 +509,351 @@ gx::DrawData* get_last_draw_command() {
+   return &last.data.draw.gx;
+ }
+ 
++// --- Curtain pixel-ownership instrumentation (env-gated) ---
++static int gpu_owner_mode() {
++  static const int mode = [] {
++    const char* e = std::getenv("NO100F_GPU_OWNER");
++    return e ? std::atoi(e) : 0;
++  }();
++  return mode;
++}
++static FILE* gpu_owner_file() {
++  static FILE* f = []() -> FILE* {
++    if (!gpu_owner_mode()) return nullptr;
++    const char* path = std::getenv("NO100F_GPU_OWNER_FILE");
++    if (!path || !*path) path = "autotest/manual/curtain-owner.jsonl";
++    FILE* out = std::fopen(path, "ab");
++    if (!out) {
++      Log.warn("NO100F_GPU_OWNER: failed to open {}", path);
++      return nullptr;
++    }
++    const char* backend = "unknown";
++    switch (webgpu::g_backendType) {
++    case wgpu::BackendType::D3D11:
++      backend = "D3D11";
++      break;
++    case wgpu::BackendType::D3D12:
++      backend = "D3D12";
++      break;
++    case wgpu::BackendType::Vulkan:
++      backend = "Vulkan";
++      break;
++    case wgpu::BackendType::Metal:
++      backend = "Metal";
++      break;
++    case wgpu::BackendType::OpenGL:
++      backend = "OpenGL";
++      break;
++    case wgpu::BackendType::OpenGLES:
++      backend = "OpenGLES";
++      break;
++    default:
++      break;
++    }
++    std::fprintf(out, "{\"type\":\"backend\",\"backend\":\"%s\",\"backendType\":%d}\n", backend,
++                 (int)webgpu::g_backendType);
++    std::fflush(out);
++    Log.warn("NO100F_GPU_OWNER: logging to {} backend={}", path, backend);
++    return out;
++  }();
++  return f;
++}
++static uint32_t g_gpuOwnerEventInFrame = 0;
++static uint32_t g_gpuOwnerSkipA = UINT32_MAX;
++static uint32_t g_gpuOwnerSkipB = UINT32_MAX;
++// Extra inclusive ranges from comma lists, e.g. "177,259" or "255-256,261".
++static std::vector<std::pair<uint32_t, uint32_t>> g_gpuOwnerSkipRanges;
++static uint32_t g_gpuOwnerSkipParsedFrame = UINT32_MAX;
++static std::vector<uint32_t> g_gpuOwnerSkipSizes;
++// Pairs of (primitive, fifoVertexCount), e.g. "144:720,152:959" in curtain-skip-sig.txt
++static std::vector<std::pair<uint32_t, uint32_t>> g_gpuOwnerSkipSigs;
++// Triples (primitive, fifoVertexCount, posSize). n==0 wildcards vertex count.
++// e.g. "144:0:12648,152:398:6540" — stable when per-frame event ordinals drift.
++struct GpuOwnerSkipTriple {
++  uint32_t prim = 0;
++  uint32_t n = 0;
++  uint32_t size = 0;
++};
++static std::vector<GpuOwnerSkipTriple> g_gpuOwnerSkipTriples;
++static thread_local GpuOwnerDrawMeta g_pendingOwnerMeta{};
++static thread_local bool g_hasPendingOwnerMeta = false;
++static thread_local bool g_lastPushWasSkip = false;
++
++static bool read_skip_control_line(const char* filePath, char* buf, size_t bufSize) {
++  if (!filePath || !*filePath || !buf || bufSize < 2) return false;
++#if defined(_WIN32)
++  // Share with writers (PowerShell Set-Content); fopen("rb") exclusive-locks on Windows.
++  FILE* sf = _fsopen(filePath, "r", _SH_DENYNO);
++#else
++  FILE* sf = std::fopen(filePath, "rb");
++#endif
++  if (!sf) return false;
++  const bool ok = std::fgets(buf, static_cast<int>(bufSize), sf) != nullptr;
++  std::fclose(sf);
++  if (!ok) return false;
++  for (char* p = buf; *p; ++p) {
++    if (*p == '\r' || *p == '\n') {
++      *p = 0;
++      break;
++    }
++  }
++  return buf[0] != 0;
++}
++
++static void parse_gpu_owner_skip() {
++  // Reload at most once per frame so we do not fight the control-file writer every draw.
++  if (g_gpuOwnerSkipParsedFrame == g_frameIndex) return;
++  g_gpuOwnerSkipParsedFrame = g_frameIndex;
++  g_gpuOwnerSkipA = UINT32_MAX;
++  g_gpuOwnerSkipB = UINT32_MAX;
++  g_gpuOwnerSkipRanges.clear();
++  g_gpuOwnerSkipSizes.clear();
++  g_gpuOwnerSkipSigs.clear();
++  g_gpuOwnerSkipTriples.clear();
++  auto tryParseEvents = [&](const char* s) {
++    if (!s || !*s) return false;
++    // "a-b" or "a,b,c-d,e" (singles and inclusive ranges).
++    bool any = false;
++    size_t at = 0;
++    const std::string list(s);
++    while (at < list.size()) {
++      const size_t comma = list.find(',', at);
++      const auto part = list.substr(at, comma == std::string::npos ? list.size() - at : comma - at);
++      unsigned a = 0, b = 0;
++      if (std::sscanf(part.c_str(), "%u-%u", &a, &b) == 2) {
++        if (!any && g_gpuOwnerSkipA == UINT32_MAX) {
++          g_gpuOwnerSkipA = a;
++          g_gpuOwnerSkipB = b;
++        } else {
++          g_gpuOwnerSkipRanges.emplace_back(a, b);
++        }
++        any = true;
++      } else if (std::sscanf(part.c_str(), "%u", &a) == 1) {
++        if (!any && g_gpuOwnerSkipA == UINT32_MAX) {
++          g_gpuOwnerSkipA = a;
++          g_gpuOwnerSkipB = a;
++        } else {
++          g_gpuOwnerSkipRanges.emplace_back(a, a);
++        }
++        any = true;
++      }
++      if (comma == std::string::npos) break;
++      at = comma + 1;
++    }
++    return any;
++  };
++  auto tryParseSizes = [&](const char* s) {
++    if (!s || !*s) return false;
++    size_t at = 0;
++    const std::string list(s);
++    while (at < list.size()) {
++      const size_t comma = list.find(',', at);
++      const auto part = list.substr(at, comma == std::string::npos ? list.size() - at : comma - at);
++      unsigned v = 0;
++      if (std::sscanf(part.c_str(), "%u", &v) == 1) g_gpuOwnerSkipSizes.push_back(v);
++      if (comma == std::string::npos) break;
++      at = comma + 1;
++    }
++    return !g_gpuOwnerSkipSizes.empty();
++  };
++  auto tryParseSigs = [&](const char* s) {
++    if (!s || !*s) return false;
++    size_t at = 0;
++    const std::string list(s);
++    while (at < list.size()) {
++      const size_t comma = list.find(',', at);
++      const auto part = list.substr(at, comma == std::string::npos ? list.size() - at : comma - at);
++      unsigned prim = 0, n = 0, sz = 0;
++      if (std::sscanf(part.c_str(), "%u:%u:%u", &prim, &n, &sz) == 3) {
++        g_gpuOwnerSkipTriples.push_back({prim, n, sz});
++      } else if (std::sscanf(part.c_str(), "%u:%u", &prim, &n) == 2) {
++        g_gpuOwnerSkipSigs.emplace_back(prim, n);
++      }
++      if (comma == std::string::npos) break;
++      at = comma + 1;
++    }
++    return !g_gpuOwnerSkipSigs.empty() || !g_gpuOwnerSkipTriples.empty();
++  };
++  const char* evPath = std::getenv("NO100F_SKIP_GPU_EVENTS_FILE");
++  if (!evPath || !*evPath) evPath = "curtain-skip-events.txt";
++  char buf[256] = {};
++  if (read_skip_control_line(evPath, buf, sizeof(buf))) {
++    tryParseEvents(buf);
++  } else if (const char* e = std::getenv("NO100F_SKIP_GPU_EVENTS")) {
++    tryParseEvents(e);
++  }
++  const char* szPath = std::getenv("NO100F_SKIP_POS_SIZES_FILE");
++  if (!szPath || !*szPath) szPath = "curtain-skip-sizes.txt";
++  buf[0] = 0;
++  if (read_skip_control_line(szPath, buf, sizeof(buf))) {
++    tryParseSizes(buf);
++  } else if (const char* e = std::getenv("NO100F_SKIP_POS_SIZES")) {
++    tryParseSizes(e);
++  }
++  const char* sigPath = std::getenv("NO100F_SKIP_DRAW_SIG_FILE");
++  if (!sigPath || !*sigPath) sigPath = "curtain-skip-sig.txt";
++  buf[0] = 0;
++  if (read_skip_control_line(sigPath, buf, sizeof(buf))) {
++    tryParseSigs(buf);
++  } else if (const char* e = std::getenv("NO100F_SKIP_DRAW_SIG")) {
++    tryParseSigs(e);
++  }
++  {
++    static int once = 0;
++    if (once < 3 && (!g_gpuOwnerSkipTriples.empty() || !g_gpuOwnerSkipSigs.empty() || g_gpuOwnerSkipA != UINT32_MAX ||
++                     !g_gpuOwnerSkipRanges.empty())) {
++      ++once;
++      std::fprintf(stderr, "[curtain.skipparse] events=%u-%u extraRanges=%zu sizes=%zu sigs=%zu triples=%zu\n",
++                   g_gpuOwnerSkipA, g_gpuOwnerSkipB, g_gpuOwnerSkipRanges.size(), g_gpuOwnerSkipSizes.size(),
++                   g_gpuOwnerSkipSigs.size(), g_gpuOwnerSkipTriples.size());
++      for (const auto& t : g_gpuOwnerSkipTriples)
++        std::fprintf(stderr, "[curtain.skipparse] triple prim=%u n=%u size=%u\n", t.prim, t.n, t.size);
++    }
++  }
++}
++
++void set_gpu_owner_draw_meta(const GpuOwnerDrawMeta& meta) {
++  g_pendingOwnerMeta = meta;
++  g_hasPendingOwnerMeta = true;
++}
++void clear_gpu_owner_draw_meta() { g_hasPendingOwnerMeta = false; }
++uint32_t gpu_owner_peek_next_event() noexcept { return g_gpuOwnerEventInFrame; }
++bool gpu_owner_last_push_was_skip() noexcept { return g_lastPushWasSkip; }
++bool gpu_owner_should_skip_next_draw() {
++  parse_gpu_owner_skip();
++  const uint32_t id = g_gpuOwnerEventInFrame;
++  if (g_gpuOwnerSkipA != UINT32_MAX && id >= g_gpuOwnerSkipA && id <= g_gpuOwnerSkipB) return true;
++  for (const auto& r : g_gpuOwnerSkipRanges) {
++    if (id >= r.first && id <= r.second) return true;
++  }
++  // Match owner-dump posSize at push time.
++  if (!g_gpuOwnerSkipSizes.empty() && g_hasPendingOwnerMeta) {
++    const uint32_t sz = g_pendingOwnerMeta.posSize;
++    for (uint32_t want : g_gpuOwnerSkipSizes) {
++      if (want == sz) return true;
++    }
++  }
++  // Match primitive:fifoVertexCount (stable when POS array size wobbles).
++  if (!g_gpuOwnerSkipSigs.empty() && g_hasPendingOwnerMeta) {
++    for (const auto& sig : g_gpuOwnerSkipSigs) {
++      if (sig.first == g_pendingOwnerMeta.primitive && sig.second == g_pendingOwnerMeta.fifoVertexCount)
++        return true;
++    }
++  }
++  // Match prim:n:size (n==0 = any n, size==0 = any size). Stable vs event-ordinal drift.
++  if (!g_gpuOwnerSkipTriples.empty() && g_hasPendingOwnerMeta) {
++    for (const auto& t : g_gpuOwnerSkipTriples) {
++      if (t.prim != g_pendingOwnerMeta.primitive) continue;
++      if (t.size != 0 && t.size != g_pendingOwnerMeta.posSize) continue;
++      if (t.n != 0 && t.n != g_pendingOwnerMeta.fifoVertexCount) continue;
++      return true;
++    }
++  }
++  return false;
++}
++
++static void gpu_owner_on_draw(const char* fallbackKind, uint32_t vtxCount, uint32_t indexCount) {
++  parse_gpu_owner_skip();
++  const uint32_t event = g_gpuOwnerEventInFrame++;
++  FILE* f = gpu_owner_file();
++  if (!f) return;
++  // Optional: only log a specific frame, or only after a min frame (post-landing).
++  static const int onlyFrame = [] {
++    const char* e = std::getenv("NO100F_GPU_OWNER_FRAME");
++    return e ? std::atoi(e) : -1;
++  }();
++  static const int minFrame = [] {
++    const char* e = std::getenv("NO100F_GPU_OWNER_MIN_FRAME");
++    return e ? std::atoi(e) : -1;
++  }();
++  if (onlyFrame >= 0 && (int)g_frameIndex != onlyFrame) return;
++  if (minFrame >= 0 && (int)g_frameIndex < minFrame) return;
++  static const int maxLines = [] {
++    const char* e = std::getenv("NO100F_GPU_OWNER_MAX");
++    return e ? std::atoi(e) : 4000;
++  }();
++  static int lines = 0;
++  if (lines >= maxLines) return;
++  ++lines;
++  const char* kind = g_hasPendingOwnerMeta ? g_pendingOwnerMeta.kind : fallbackKind;
++  const uint32_t pass = g_currentRenderPass == UINT32_MAX ? 0u : g_currentRenderPass;
++  if (g_hasPendingOwnerMeta) {
++    const auto& m = g_pendingOwnerMeta;
++    std::fprintf(f,
++                 "{\"type\":\"gpu_draw\",\"frame\":%u,\"pass\":%u,\"event\":%u,\"target\":\"pass-%u\",\"kind\":\"%s\","
++                 "\"fifoCmd\":\"0x%x\",\"vat\":%u,\"primitive\":%u,\"fifoVertexCount\":%u,\"expandedTriangleCount\":%u,"
++                 "\"vertexArrayGuestBase\":\"0x%llx\",\"posSize\":%u,\"posStride\":%u,\"shaderUniformMatrixSlot\":%u,"
++                 "\"numTexGens\":%u,\"cull\":%d,\"blend\":%d,\"indexCount\":%u",
++                 g_frameIndex, pass, event, pass, kind, m.fifoCmd, m.vat, m.primitive, m.fifoVertexCount,
++                 m.expandedTriangleCount, (unsigned long long)m.vertexArrayGuestBase, m.posSize, m.posStride,
++                 m.shaderUniformMatrixSlot, m.numTexGens, m.cull, m.blend, indexCount);
++    if (m.hasMtx) {
++      std::fprintf(f, ",\"mtx\":[%.6g,%.6g,%.6g,%.6g,%.6g,%.6g,%.6g,%.6g,%.6g,%.6g,%.6g,%.6g]", m.mtx[0], m.mtx[1],
++                   m.mtx[2], m.mtx[3], m.mtx[4], m.mtx[5], m.mtx[6], m.mtx[7], m.mtx[8], m.mtx[9], m.mtx[10],
++                   m.mtx[11]);
++    }
++    if (m.hasUsed) {
++      std::fprintf(f,
++                   ",\"minIdx\":%u,\"maxIdx\":%u,\"uniq\":%u,\"deepUsed\":%u,"
++                   "\"usedMin\":[%.6g,%.6g,%.6g],\"usedMax\":[%.6g,%.6g,%.6g]",
++                   m.minIdx, m.maxIdx, m.uniq, m.deepUsed, m.usedMin[0], m.usedMin[1], m.usedMin[2], m.usedMax[0],
++                   m.usedMax[1], m.usedMax[2]);
++    }
++    if (m.hasWorld) {
++      std::fprintf(f,
++                   ",\"worldMin\":[%.6g,%.6g,%.6g],\"worldMax\":[%.6g,%.6g,%.6g],"
++                   "\"worldYspan\":%.6g,\"worldZspan\":%.6g",
++                   m.worldMin[0], m.worldMin[1], m.worldMin[2], m.worldMax[0], m.worldMax[1], m.worldMax[2],
++                   m.worldMax[1] - m.worldMin[1], m.worldMax[2] - m.worldMin[2]);
++    }
++    std::fprintf(f, "}\n");
++  } else {
++    std::fprintf(f,
++                 "{\"type\":\"gpu_draw\",\"frame\":%u,\"pass\":%u,\"event\":%u,\"target\":\"pass-%u\",\"kind\":\"%s\","
++                 "\"fifoVertexCount\":%u,\"indexCount\":%u}\n",
++                 g_frameIndex, pass, event, pass, kind, vtxCount, indexCount);
++  }
++  if ((lines & 63) == 0) std::fflush(f);
++  g_hasPendingOwnerMeta = false;
++}
++
+ static void push_draw_command(ShaderDrawCommand data) {
++  g_lastPushWasSkip = false;
++  if (!g_gpuOwnerSkipSizes.empty() && g_hasPendingOwnerMeta &&
++      (g_pendingOwnerMeta.primitive == 144 || g_pendingOwnerMeta.posSize == 12648 ||
++       g_pendingOwnerMeta.posSize == 6540)) {
++    if (static int n = 0; n++ < 80)
++      std::fprintf(stderr, "[curtain.pushmeta] size=%u n=%u prim=%u ntg=%u blend=%d\n",
++                   g_pendingOwnerMeta.posSize, g_pendingOwnerMeta.fifoVertexCount,
++                   g_pendingOwnerMeta.primitive, g_pendingOwnerMeta.numTexGens, g_pendingOwnerMeta.blend);
++  }
++  if (gpu_owner_should_skip_next_draw()) {
++    // Still consume the event id and log a skip marker so bisect ranges stay aligned.
++    const uint32_t event = g_gpuOwnerEventInFrame++;
++    if (FILE* f = gpu_owner_file()) {
++      std::fprintf(f,
++                   "{\"type\":\"gpu_skip\",\"frame\":%u,\"pass\":%u,\"event\":%u,\"posSize\":%u,\"primitive\":%u,"
++                   "\"fifoVertexCount\":%u}\n",
++                   g_frameIndex, g_currentRenderPass == UINT32_MAX ? 0u : g_currentRenderPass, event,
++                   g_hasPendingOwnerMeta ? g_pendingOwnerMeta.posSize : 0u,
++                   g_hasPendingOwnerMeta ? g_pendingOwnerMeta.primitive : 0u,
++                   g_hasPendingOwnerMeta ? g_pendingOwnerMeta.fifoVertexCount : 0u);
++    }
++    if (static int n = 0; n++ < 80) {
++      std::fprintf(stderr, "[curtain.skippush] ev=%u size=%u n=%u prim=%u hasMeta=%d\n", event,
++                   g_hasPendingOwnerMeta ? g_pendingOwnerMeta.posSize : 0u,
++                   g_hasPendingOwnerMeta ? g_pendingOwnerMeta.fifoVertexCount : 0u,
++                   g_hasPendingOwnerMeta ? g_pendingOwnerMeta.primitive : 0u, (int)g_hasPendingOwnerMeta);
++    }
++    g_hasPendingOwnerMeta = false;
++    g_lastPushWasSkip = true;
++    gx::g_gxState.stateDirty = true;
++    return;
++  }
++  const uint32_t vtxCount = data.type == ShaderType::GX ? data.gx.vtxCount : 0u;
++  const uint32_t indexCount = data.type == ShaderType::GX ? data.gx.indexCount : 0u;
++  const char* kind = data.type == ShaderType::Clear ? "clear" : "gx";
++  gpu_owner_on_draw(kind, vtxCount, indexCount);
+   push_command(CommandType::Draw, Command::Data{.draw = data});
+   ++g_drawCallCount;
+ }
+@@ -1149,6 +1500,9 @@ static bool begin_frame_impl(bool clearEfb, bool capacityResume = false) {
+   g_renderPasses[0].clearColor = clearEfb;
+   g_renderPasses[0].clearDepth = clearEfb;
+   g_currentRenderPass = 0;
++  // Only reset the GPU-owner event clock on a true new frame. Capacity-resume
++  // re-enters begin_frame_impl mid-frame and must keep a monotonic event id.
++  if (!capacityResume) g_gpuOwnerEventInFrame = 0;
+   // Refresh paired render viewport/scissor from logical state in case the FB size changed.
+   const auto mappedRenderState = gx::map_logical_render_state();
+   const bool renderStateChanged = gx::g_gxState.renderViewport != mappedRenderState.viewport ||
+@@ -1335,6 +1689,7 @@ void split_staging_batch() {
+ }
+ 
+ uint32_t current_frame() noexcept { return g_frameIndex; }
++uint32_t current_pass_index() noexcept { return g_currentRenderPass == UINT32_MAX ? 0u : g_currentRenderPass; }
+ 
+ // The only place that erases from g_cachedBindGroups, whose handles the frame being encoded still
+ // holds, so it runs in the seal prologue with the renderer mutex held and the producer excluded.
+diff --git a/wiicompiled/aurora-main/lib/gfx/common.hpp b/wiicompiled/aurora-main/lib/gfx/common.hpp
+index 55b1bd5..393697a 100644
+--- a/wiicompiled/aurora-main/lib/gfx/common.hpp
++++ b/wiicompiled/aurora-main/lib/gfx/common.hpp
+@@ -285,6 +285,46 @@ void abort_frame() noexcept;
+ void end_frame(const wgpu::CommandEncoder& cmd);
+ void end_batch(const wgpu::CommandEncoder& cmd);
+ uint32_t current_frame() noexcept;
++uint32_t current_pass_index() noexcept;
++
++// Curtain pixel-ownership (NO100F_GPU_OWNER=1): attach FIFO meta before push_draw_command;
++// events are numbered per frame at the host submission boundary. NO100F_SKIP_GPU_EVENTS=a-b
++// skips inclusive event IDs for bisect (diagnosis only).
++struct GpuOwnerDrawMeta {
++  const char* kind = "gx";  // gx | clear | copy
++  uint32_t fifoCmd = 0;
++  uint32_t vat = 0;
++  uint32_t primitive = 0;
++  uint32_t fifoVertexCount = 0;
++  uint32_t expandedTriangleCount = 0;
++  uintptr_t vertexArrayGuestBase = 0;
++  uint32_t posSize = 0;
++  uint32_t posStride = 0;
++  uint32_t shaderUniformMatrixSlot = 0;
++  uint32_t numTexGens = 0;
++  int cull = -1;
++  int blend = -1;
++  float mtx[12] = {};
++  bool hasMtx = false;
++  // Used-index model AABB (filled for curtain pool sizes 6540/12648).
++  float usedMin[3] = {};
++  float usedMax[3] = {};
++  // Same verts after current PnMtx (model→view/world as staged for the shader).
++  float worldMin[3] = {};
++  float worldMax[3] = {};
++  uint32_t minIdx = 0;
++  uint32_t maxIdx = 0;
++  uint32_t uniq = 0;
++  uint32_t deepUsed = 0;  // used slots with model z < -15
++  bool hasUsed = false;
++  bool hasWorld = false;
++};
++void set_gpu_owner_draw_meta(const GpuOwnerDrawMeta& meta);
++void clear_gpu_owner_draw_meta();
++bool gpu_owner_should_skip_next_draw();
++// True if the most recent push_draw_command returned early due to event/size skip.
++bool gpu_owner_last_push_was_skip() noexcept;
++uint32_t gpu_owner_peek_next_event() noexcept;
+ 
+ // One frame's recorded render passes, detached from the guest-visible
+ // recording state. The contents are private to common.cpp.
+diff --git a/wiicompiled/aurora-main/lib/gx/command_processor.cpp b/wiicompiled/aurora-main/lib/gx/command_processor.cpp
+index 6d098c6..18664d0 100644
+--- a/wiicompiled/aurora-main/lib/gx/command_processor.cpp
++++ b/wiicompiled/aurora-main/lib/gx/command_processor.cpp
+@@ -25,9 +25,15 @@
+ #include <cmath>
+ #include <cstdio>
+ #include <cstring>
++#if defined(_WIN32)
++#include <share.h>
++#endif
+ #include <mutex>
+ #include <optional>
++#include <string>
++#include <string_view>
+ #include <vector>
++// std::once_flag for curtain LB/F8 capture window
+ 
+ extern "C" {
+ int g_spmDrawDump = 0;
+@@ -39,6 +45,48 @@ unsigned g_spmAudit[8] = {};  // render audit for tools/sweep-spm-maps.py
+ unsigned g_spmGameClear = 0;  // the game's own EFB clear colour (0xRRGGBB) while sweeping
+ int g_spmCullOff = 0;
+ }
++
++// i001 curtain capture window: F8 / Xbox LB begin+end (settings_overlay), or env NO100F_CURTAIN_TRACE=1 continuous.
++namespace {
++std::atomic<bool> g_curtainTraceActive{false};
++std::atomic<bool> g_curtainTraceWindowed{false};
++std::atomic<unsigned> g_curtainTraceLogged{0};
++std::atomic<unsigned> g_curtainTraceEpoch{0};
++std::once_flag g_curtainTraceEnvOnce;
++
++void curtain_trace_init_from_env() {
++  std::call_once(g_curtainTraceEnvOnce, [] {
++    if (std::getenv("NO100F_CURTAIN_TRACE") != nullptr) {
++      g_curtainTraceActive.store(true, std::memory_order_relaxed);
++    }
++  });
++}
++}  // namespace
++
++extern "C" {
++int No100f_CurtainTraceActive(void) {
++  curtain_trace_init_from_env();
++  return g_curtainTraceActive.load(std::memory_order_relaxed) ? 1 : 0;
++}
++unsigned No100f_CurtainTraceLogged(void) { return g_curtainTraceLogged.load(std::memory_order_relaxed); }
++void No100f_CurtainTraceBegin(void) {
++  curtain_trace_init_from_env();
++  g_curtainTraceLogged.store(0, std::memory_order_relaxed);
++  g_curtainTraceEpoch.fetch_add(1, std::memory_order_relaxed);
++  g_curtainTraceWindowed.store(true, std::memory_order_relaxed);
++  g_curtainTraceActive.store(true, std::memory_order_relaxed);
++  std::fprintf(stderr, "[curtain] MARK begin\n");
++  std::fflush(stderr);
++}
++void No100f_CurtainTraceEnd(void) {
++  const unsigned logged = g_curtainTraceLogged.load(std::memory_order_relaxed);
++  g_curtainTraceActive.store(false, std::memory_order_relaxed);
++  g_curtainTraceWindowed.store(false, std::memory_order_relaxed);
++  std::fprintf(stderr, "[curtain] MARK end logged=%u\n", logged);
++  std::fflush(stderr);
++}
++}
++
+ namespace aurora::gx {
+ GXState::CopyTextureRef* find_copy_texture_for_texobj(const GXTexObj_& obj) noexcept;  // gx.cpp
+ // NO100F: the last texture copies (GXCopyTex) as size and format, so a 2D draw pasting one back can be told apart
+@@ -354,16 +402,26 @@ static bool copy_xf_data(u32 addr, const u8* data, u32 len, bool bigEndian) {
+     u32 startOffset = addr % 12;
+     // We only support full writes to matrices
+     XF_REQUIRE(mtxIdx < MaxPnMtx, "XF: PosMtx copy oob; mtxIdx={}", mtxIdx);
+-    if (!(startOffset == 0 && len == 12)) {  // NO100F diagnostic: what the odd write holds (first few)
++    if (!(startOffset == 0 && len == 12)) {
++      // Rejected partial PosMtx write (see NO100F_XF_REJECT_LOG). Never read before `data`.
+       static int dumped = 0;
+-      if (dumped++ < 4) {
++      if (dumped++ < 8) {
+         std::string vals;
+         for (u32 i = 0; i < len && i < 24; i++) vals += fmt::format(" {:.4g}", read_f32(data + i * 4, bigEndian));
+-        std::string before, desc;
+-        for (int i = -96; i < 8; i++) before += fmt::format(" {:02x}", data[i]);
+-        for (u32 a = 0; a < 21; a++) desc += fmt::format("{}", static_cast<int>(g_gxState.vtxDesc[a]));
+-        Log.warn("XF odd write addr=0x{:03X} len={} | aurora vtxDesc(attr0..20)={} | bytes[-96..+8]:{}", addr, len, desc,
+-                 before);
++        Log.warn("XF PosMtx sub-copy rejected addr=0x{:03X} offs={} len={} vals:{}", addr, startOffset, len, vals);
++      }
++      if (static const int xfRejectLog = [] {
++            const char* e = std::getenv("NO100F_XF_REJECT_LOG");
++            return e ? std::atoi(e) : 0;
++          }();
++          xfRejectLog) {
++        static int n = 0;
++        if (n++ < 200) {
++          std::fprintf(stderr,
++                       "{\"type\":\"xf_load\",\"source\":\"direct_or_indexed\",\"dstWord\":\"0x%03X\",\"countWords\":%u,"
++                       "\"startOffset\":%u,\"acceptedByOldCode\":false,\"mtxIdx\":%u}\n",
++                       addr, len, startOffset, mtxIdx);
++        }
+       }
+     }
+     XF_REQUIRE(startOffset == 0 && len == 12, "XF: PosMtx sub-copy unsupported: offs={}, len={}", startOffset, len);
+@@ -2086,7 +2144,8 @@ static u32 calculate_last_vtx_size(GXVtxFmt fmt) {
+ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+                                  gfx::Range vertRange, uint16_t usedPnMtxMask,
+                                  HashType matrixTopologySignature,
+-                                 HashType geometrySignature, bool interpolationIdentityActive);
++                                 HashType geometrySignature, bool interpolationIdentityActive,
++                                 const uint8_t* vtxBytes = nullptr, u32 vtxStride = 0, bool vtxBigEndian = true);
+ 
+ // The per-draw geometry signature, matrix-usage mask and draw-identity hashes exist purely to feed frame interpolation (build_uniform consumes them only after its `frame_interpolation_fps() == 0` early-out).
+ static inline bool frame_interpolation_identity_needed() noexcept {
+@@ -2361,7 +2420,8 @@ static void spm_dump_draw(const char* path, u8 prim, u32 fmt, u32 count, u32 vtx
+   }
+   float pm[16];
+   std::memcpy(pm, &g_gxState.proj, sizeof(pm));
+-  const u32 mi = g_gxState.currentPnMtx / 3u;
++  // currentPnMtx is already a matrix slot (XF handler divides the raw field by 3).
++  const u32 mi = g_gxState.currentPnMtx;
+   float mv[12] = {};
+   if (mi < MaxPnMtx) std::memcpy(mv, &g_gxState.pnMtx[mi].pos, sizeof(mv));
+   const auto& vp = g_gxState.renderViewport;
+@@ -2554,7 +2614,8 @@ static void spm_bbox_accumulate(GXVtxFmt fmt, const u8* verts, u32 count, u32 vt
+     const bool cbe = (pd == GX_DIRECT) ? be : !arr.le;
+     float pos[3] = {0.f, 0.f, 0.f};
+     for (u32 c = 0; c < comps; ++c) pos[c] = spm_bbox_comp(pp + c * compSize, pf.type, pf.frac, cbe);
+-    const u32 mi = (hasPnIdx ? v[0] : g_gxState.currentPnMtx) / 3u;
++    // PNMTXIDX byte needs /3; currentPnMtx is already a slot index.
++    const u32 mi = hasPnIdx ? (u32(v[0]) / 3u) : g_gxState.currentPnMtx;
+     if (mi >= MaxPnMtx) continue;
+     float m[12];
+     std::memcpy(m, &g_gxState.pnMtx[mi].pos, sizeof(m));
+@@ -2613,7 +2674,8 @@ static bool spm_draw_ndc_extent(GXVtxFmt fmt, const u8* verts, u32 count, u32 vt
+     float pos[3] = {0.f, 0.f, 0.f};
+     for (u32 c = 0; c < comps; ++c) pos[c] = spm_bbox_comp(pp + c * compSize, pf.type, pf.frac, cbe);
+     for (int c = 0; c < 3; ++c) { mb[c] = std::min(mb[c], pos[c]); mb[c + 3] = std::max(mb[c + 3], pos[c]); }
+-    const u32 mi = (hasPnIdx ? v[0] : g_gxState.currentPnMtx) / 3u;
++    // PNMTXIDX byte needs /3; currentPnMtx is already a slot index.
++    const u32 mi = hasPnIdx ? (u32(v[0]) / 3u) : g_gxState.currentPnMtx;
+     if (mi >= MaxPnMtx) continue;
+     float m[12];
+     std::memcpy(m, &g_gxState.pnMtx[mi].pos, sizeof(m));
+@@ -2674,7 +2736,9 @@ static bool gx_vertex_ndc(GXVtxFmt fmt, const u8* v, bool be, float out[3]) {
+   const bool cbe = (pd == GX_DIRECT) ? be : !arr.le;
+   float pos[3] = {0.f, 0.f, 0.f};
+   for (u32 c = 0; c < comps; ++c) pos[c] = spm_bbox_comp(pp + c * compSize, pf.type, pf.frac, cbe);
+-  const u32 mi = (g_gxState.vtxDesc[GX_VA_PNMTXIDX] == GX_DIRECT ? v[0] : g_gxState.currentPnMtx) / 3u;
++  // PNMTXIDX byte needs /3; currentPnMtx is already a slot index.
++  const u32 mi =
++      g_gxState.vtxDesc[GX_VA_PNMTXIDX] == GX_DIRECT ? (u32(v[0]) / 3u) : g_gxState.currentPnMtx;
+   if (mi >= MaxPnMtx) return false;
+   float m[12];
+   std::memcpy(m, &g_gxState.pnMtx[mi].pos, sizeof(m));
+@@ -2888,7 +2952,7 @@ bool submit_raw_draw(GXPrimitive prim, GXVtxFmt fmt, const uint8_t* vertices, ui
+   handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
+                        matrixUsage.mask, matrixUsage.topologySignature,
+                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
+-                       interpolationIdentityActive);
++                       interpolationIdentityActive, vertices, vtxSize, true);
+   g_rawFullscreenOverlay = false;
+   return true;
+ }
+@@ -2931,12 +2995,32 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
+       if (std::uncaught_exceptions() == 0) pos += bytes;  // a StagingBatchFull retry re-parses this draw
+     }
+   } tailSkip{pos};
+-  if (g_replayingDisplayList) {
++  const u16 declaredVtxCount = vtxCount;
++  // NO100F_CURTAIN_TRACE: TailSkip outcome for the exact draw (0=none, 1=array_overlap, 2=idx_jump).
++  u32 curtainTrimReason = 0;
++  u32 curtainTailStart = ~0u;
++  u32 curtainPriorMaxIdx = 0;
++  std::ptrdiff_t curtainFirstOff = -1;
++  std::ptrdiff_t curtainEndOff = -1;
++  std::ptrdiff_t curtainLastBlockOff = -1;
++  std::ptrdiff_t curtainDeclaredEndOff = -1;
++  // NO100F_TAIL_SKIP=0 disables both Mystic Manor DL-tail workarounds (diagnostic A/B only).
++  const bool curtainTailSkipEnabled = [] {
++    const char* e = std::getenv("NO100F_TAIL_SKIP");
++    return e == nullptr || std::atoi(e) != 0;
++  }();
++  if (g_replayingDisplayList && curtainTailSkipEnabled) {
+     const u8* first = data + pos;
+-    const u8* end = first + totalVtxBytes;
++    const u8* declaredEnd = first + totalVtxBytes;
++    const u8* end = declaredEnd;
++    curtainFirstOff = first - data;
++    curtainDeclaredEndOff = declaredEnd - data;
+     for (int a = GX_VA_POS; a <= GX_VA_TEX7; ++a) {
+       const auto* base = static_cast<const u8*>(g_gxState.arrays[a].data);
+-      if ((g_gxState.vtxDesc[a] == GX_INDEX8 || g_gxState.vtxDesc[a] == GX_INDEX16) && base > first && base < end) end = base;
++      if ((g_gxState.vtxDesc[a] == GX_INDEX8 || g_gxState.vtxDesc[a] == GX_INDEX16) && base > first && base < end) {
++        end = base;
++        curtainTrimReason = 1;
++      }
+     }
+     // The same overlap with a buffer that is not bound here (NO100F characters: the list's last 32-byte block is
+     // shared with the next allocation, so a strip's final vertices hold that buffer's floats): stop at a vertex in
+@@ -2944,18 +3028,26 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
+     // vertices threw a triangle across the screen from the character, different every frame.
+     const GXAttrType pd = g_gxState.vtxDesc[GX_VA_POS];
+     const u8* lastBlock = data + (size > 32 ? size - 32 : 0);
++    curtainLastBlockOff = lastBlock - data;
+     if ((pd == GX_INDEX8 || pd == GX_INDEX16) && end > lastBlock && vtxCount > 8) {
+       const u32 pre = matrix_index_prefix_size(fmt);
+       const auto posIdx = [&](const u8* v) {
+         return pd == GX_INDEX8 ? u32(v[pre]) : (bigEndian ? u32((v[pre] << 8) | v[pre + 1]) : u32(v[pre] | (v[pre + 1] << 8)));
+       };
+       const u32 tailStart = u32(std::max<std::ptrdiff_t>(0, (lastBlock - first + vtxSize - 1) / vtxSize));
++      curtainTailStart = tailStart;
+       u32 maxIdx = 0;
+       for (u32 i = 0; i < tailStart && i < vtxCount; ++i) maxIdx = std::max(maxIdx, posIdx(first + i * vtxSize));
++      curtainPriorMaxIdx = maxIdx;
+       for (u32 i = tailStart; tailStart >= 4 && i < u32(end - first) / vtxSize; ++i)
+-        if (posIdx(first + i * vtxSize) > 2 * maxIdx + 16) { end = first + i * vtxSize; break; }
++        if (posIdx(first + i * vtxSize) > 2 * maxIdx + 16) {
++          end = first + i * vtxSize;
++          curtainTrimReason = 2;
++          break;
++        }
+     }
+-    if (end != first + totalVtxBytes) UNLIKELY {
++    curtainEndOff = end - data;
++    if (end != declaredEnd) UNLIKELY {
+       const u32 fetched = u32(end - first) / vtxSize;
+       const u32 unit = prim == GX_QUADS ? 4 : prim == GX_TRIANGLES ? 3 : prim == GX_LINES ? 2 : 1;
+       const u16 kept = static_cast<u16>(fetched - fetched % unit);
+@@ -2983,6 +3075,9 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
+     const auto& arr = g_gxState.arrays[GX_VA_POS];
+     const bool hasPn = g_gxState.vtxDesc[GX_VA_PNMTXIDX] == GX_DIRECT;
+     const u32 pre = matrix_index_prefix_size(fmt);
++    const auto& pfOob = g_gxState.vtxFmts[fmt].attrs[GX_VA_POS];
++    const u32 csOob = pfOob.type == GX_F32 ? 4u : (pfOob.type >= GX_U16 ? 2u : 1u);
++    const u32 posBytesNeeded = 3u * csOob;  // XYZ span; was incorrectly +6 (too short for F32)
+     u32 oob = 0, badPn = 0, maxIdx = 0;
+     for (u32 i = 0; i < vtxCount; ++i) {
+       const u8* v = data + pos + i * vtxSize;
+@@ -2991,12 +3086,12 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
+         const u8* pp = v + pre;
+         const u32 idx = pd == GX_INDEX8 ? pp[0] : (bigEndian ? u32((pp[0] << 8) | pp[1]) : u32(pp[0] | (pp[1] << 8)));
+         maxIdx = std::max(maxIdx, idx);
+-        if (arr.stride && u64(idx) * arr.stride + 6 > arr.size) ++oob;
++        if (arr.stride && u64(idx) * arr.stride + posBytesNeeded > arr.size) ++oob;
+       }
+     }
+     // Model-space outliers: a vertex 6x farther from the draw's centre than the median vertex.
+-    const auto& pf = g_gxState.vtxFmts[fmt].attrs[GX_VA_POS];
+-    const u32 cs = pf.type == GX_F32 ? 4u : (pf.type >= GX_U16 ? 2u : 1u);
++    const auto& pf = pfOob;
++    const u32 cs = csOob;
+     std::vector<std::array<float, 3>> p;
+     std::vector<u32> pidx;
+     for (u32 i = 0; i < vtxCount && pd != GX_NONE; ++i) {
+@@ -3043,6 +3138,552 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
+       std::fprintf(stderr, "[idxchk] prim=%d n=%u oob=%u badpn=%u maxidx=%u stride=%u size=%u dl=%d\n", (int)prim, (unsigned)vtxCount, oob,
+                    badPn, maxIdx, (unsigned)arr.stride, (unsigned)arr.size, (int)g_replayingDisplayList);
+   }
++  // Curtain capture: F8/LB window (No100f_CurtainTraceBegin) or env NO100F_CURTAIN_TRACE=1.
++  if (No100f_CurtainTraceActive()) {
++    const GXAttrType pd = g_gxState.vtxDesc[GX_VA_POS];
++    const auto& arr = g_gxState.arrays[GX_VA_POS];
++    const auto& pf = g_gxState.vtxFmts[fmt].attrs[GX_VA_POS];
++    // 684/3828 = tip panel DLs; 6540/12648 = purple-owner pool (events ~251–266 at locked landing).
++    const bool poolHit = arr.size == 6540u || arr.size == 12648u;
++    const bool sizeHit = arr.size == 684u || arr.size == 3828u || poolHit;
++    // Pool draws are often immediate FIFO (not DL); tip panels stay DL-gated.
++    if ((g_replayingDisplayList || poolHit) && sizeHit && (pd == GX_INDEX8 || pd == GX_INDEX16) && pf.type == GX_F32 &&
++        arr.stride == 12 && arr.data && vtxCount >= 4) {
++      const u32 pre = matrix_index_prefix_size(fmt);
++      const u32 nSlots = arr.size / arr.stride;
++      const bool hasPn = g_gxState.vtxDesc[GX_VA_PNMTXIDX] == GX_DIRECT;
++      std::vector<std::array<float, 3>> slots(nSlots);
++      std::vector<float> slotDist(nSlots);
++      float center[3] = {};
++      u32 ok = 0;
++      for (u32 i = 0; i < nSlots; ++i) {
++        const u8* pp = static_cast<const u8*>(arr.data) + i * arr.stride;
++        slots[i] = {spm_bbox_comp(pp, GX_F32, 0, true), spm_bbox_comp(pp + 4, GX_F32, 0, true),
++                    spm_bbox_comp(pp + 8, GX_F32, 0, true)};
++        if (!std::isfinite(slots[i][0]) || !std::isfinite(slots[i][1]) || !std::isfinite(slots[i][2])) continue;
++        for (int k = 0; k < 3; ++k) center[k] += slots[i][k];
++        ++ok;
++      }
++      if (ok >= 8) {
++        for (int k = 0; k < 3; ++k) center[k] /= static_cast<float>(ok);
++        std::vector<float> radii;
++        radii.reserve(ok);
++        for (u32 i = 0; i < nSlots; ++i) {
++          if (!std::isfinite(slots[i][0])) {
++            slotDist[i] = 0;
++            continue;
++          }
++          slotDist[i] = std::hypot(slots[i][0] - center[0], slots[i][1] - center[1], slots[i][2] - center[2]);
++          radii.push_back(slotDist[i]);
++        }
++        std::nth_element(radii.begin(), radii.begin() + static_cast<std::ptrdiff_t>(radii.size() / 2), radii.end());
++        const float med = radii[radii.size() / 2];
++        const float spikeR = std::max(3.f * med, 20.f);
++        std::vector<u32> spikeIdx;
++        for (u32 i = 0; i < nSlots; ++i)
++          if (slotDist[i] > spikeR) spikeIdx.push_back(i);
++        // Which spike slots does this draw actually index?
++        absl::flat_hash_map<u32, u32> firstOrd;  // idx -> first list ordinal
++        u32 maxIdx = 0;
++        for (u32 i = 0; i < vtxCount; ++i) {
++          const u8* ip = data + pos + i * vtxSize + pre;
++          const u32 idx = pd == GX_INDEX8 ? ip[0] : (bigEndian ? u32((ip[0] << 8) | ip[1]) : u32(ip[0] | (ip[1] << 8)));
++          maxIdx = std::max(maxIdx, idx);
++          if (firstOrd.find(idx) == firstOrd.end()) firstOrd[idx] = i;
++        }
++        u32 referencedSpikes = 0;
++        for (u32 idx : spikeIdx)
++          if (firstOrd.contains(idx)) ++referencedSpikes;
++        // Fingerprint used POS slots — log on change so an LB window lasts through flutter, not one frame.
++        u32 usedHash = 2166136261u;
++        for (auto& kv : firstOrd) {
++          if (kv.first >= nSlots) continue;
++          const u8* pp = static_cast<const u8*>(arr.data) + kv.first * arr.stride;
++          for (int b = 0; b < 12; ++b) {
++            usedHash ^= pp[b];
++            usedHash *= 16777619u;
++          }
++        }
++        const u32 frame = gfx::current_frame();
++        static int drawLogs = 0;
++        static int refSpikeLogs = 0;
++        static unsigned lastEpoch = ~0u;
++        static u32 lastUsedHash684 = 0, lastUsedHash3828 = 0, lastUsedHashPool = 0;
++        static u32 lastHeartbeatFrame = ~0u;
++        const unsigned epoch = g_curtainTraceEpoch.load(std::memory_order_relaxed);
++        if (epoch != lastEpoch) {
++          lastEpoch = epoch;
++          drawLogs = 0;
++          refSpikeLogs = 0;
++          lastUsedHash684 = 0;
++          lastUsedHash3828 = 0;
++          lastUsedHashPool = 0;
++          lastHeartbeatFrame = ~0u;
++        }
++        const bool windowed = g_curtainTraceWindowed.load(std::memory_order_relaxed);
++        u32& lastUsedHash = arr.size == 684u      ? lastUsedHash684
++                            : arr.size == 3828u ? lastUsedHash3828
++                                                : lastUsedHashPool;
++        const bool contentChanged = usedHash != lastUsedHash;
++        const bool heartbeat = windowed && frame != lastHeartbeatFrame && (frame % 20u) == 0u;
++        // Prefer content changes; sparse heartbeat while armed; always log if a tip slot is actually indexed.
++        const bool interesting = (referencedSpikes > 0 && refSpikeLogs < 400) || contentChanged ||
++                                 (heartbeat && drawLogs < 2500) || (!windowed && drawLogs < 24) || drawLogs < 4;
++        if (interesting) {
++          if (referencedSpikes > 0) ++refSpikeLogs;
++          else ++drawLogs;
++          lastUsedHash = usedHash;
++          if (heartbeat) lastHeartbeatFrame = frame;
++          g_curtainTraceLogged.fetch_add(1, std::memory_order_relaxed);
++          {
++          const char* trimName = curtainTrimReason == 1 ? "array_overlap" : curtainTrimReason == 2 ? "idx_jump" : "none";
++          float maxd = 0;
++          u32 maxAt = 0;
++          for (u32 i = 0; i < nSlots; ++i)
++            if (slotDist[i] > maxd) {
++              maxd = slotDist[i];
++              maxAt = i;
++            }
++          u32 minIdx = ~0u;
++          for (auto& kv : firstOrd) minIdx = std::min(minIdx, kv.first);
++          std::fprintf(stderr,
++                       "[curtain] f=%u draw=%u prim=%d fmt=%d decl_n=%u kept_n=%u vsz=%u dl_size=%u trim=%s(%u) "
++                       "first=%lld end=%lld decl_end=%lld last32=%lld tailStart=%u priorMax=%u "
++                       "pos_data=%p stride=%u size=%u le=%d curPn=%u hasPn=%d arr_n=%u med=%g spikeR=%g "
++                       "spikes=%zu ref_spikes=%u minIdx=%u maxIdx=%u uniq=%zu usedHash=%08x chg=%d "
++                       "maxd=%g at=(%g %g %g) center=(%g %g %g)\n",
++                       frame, g_spmDrawIdx, (int)prim, (int)fmt, (unsigned)declaredVtxCount, (unsigned)vtxCount, vtxSize,
++                       size, trimName, curtainTrimReason, (long long)curtainFirstOff, (long long)curtainEndOff,
++                       (long long)curtainDeclaredEndOff, (long long)curtainLastBlockOff, curtainTailStart,
++                       curtainPriorMaxIdx, arr.data, (unsigned)arr.stride, (unsigned)arr.size, (int)arr.le,
++                       (unsigned)g_gxState.currentPnMtx, (int)hasPn, (unsigned)nSlots, med, spikeR, spikeIdx.size(),
++                       referencedSpikes, minIdx, maxIdx, firstOrd.size(), usedHash, (int)contentChanged, maxd,
++                       slots[maxAt][0], slots[maxAt][1], slots[maxAt][2], center[0], center[1], center[2]);
++          // Used-index model-space AABB + current PN matrix (normalized slot).
++          {
++            float umin[3] = {1e30f, 1e30f, 1e30f}, umax[3] = {-1e30f, -1e30f, -1e30f};
++            for (auto& kv : firstOrd) {
++              const u32 idx = kv.first;
++              if (idx >= nSlots) continue;
++              for (int k = 0; k < 3; ++k) {
++                umin[k] = std::min(umin[k], slots[idx][k]);
++                umax[k] = std::max(umax[k], slots[idx][k]);
++              }
++            }
++            const u32 slot = g_gxState.currentPnMtx < MaxPnMtx ? g_gxState.currentPnMtx : 0u;
++            const auto& m = g_gxState.pnMtx[slot].pos;
++            // World AABB after current pnMtx + material fingerprint (curtain-specific ID).
++            float wmin[3] = {1e30f, 1e30f, 1e30f}, wmax[3] = {-1e30f, -1e30f, -1e30f};
++            float maxEdge = 0.f;
++            {
++              const u32 pre = matrix_index_prefix_size(fmt);
++              auto posIdxAt = [&](u32 vi) -> u32 {
++                const u8* ip = data + pos + vi * vtxSize + pre;
++                return pd == GX_INDEX8 ? ip[0]
++                                       : (bigEndian ? u32((ip[0] << 8) | ip[1]) : u32(ip[0] | (ip[1] << 8)));
++              };
++              // Curtain draws are GX_TRIANGLESTRIP (logged prim=152/0x98), not triangle lists.
++              auto considerTri = [&](u32 i0, u32 i1, u32 i2) {
++                const u32 ia = posIdxAt(i0), ib = posIdxAt(i1), ic = posIdxAt(i2);
++                if (ia >= nSlots || ib >= nSlots || ic >= nSlots) return;
++                auto dist = [&](u32 a, u32 b) {
++                  return std::hypot(slots[a][0] - slots[b][0], slots[a][1] - slots[b][1], slots[a][2] - slots[b][2]);
++                };
++                maxEdge = std::max({maxEdge, dist(ia, ib), dist(ib, ic), dist(ic, ia)});
++              };
++              if (prim == GX_TRIANGLES) {
++                for (u32 t = 0; t + 2 < vtxCount; t += 3) considerTri(t, t + 1, t + 2);
++              } else if (prim == GX_TRIANGLESTRIP && vtxCount >= 3) {
++                for (u32 v = 2; v < vtxCount; ++v) {
++                  if ((v & 1) == 0)
++                    considerTri(v - 2, v - 1, v);
++                  else
++                    considerTri(v - 1, v - 2, v);
++                }
++              }
++              for (auto& kv : firstOrd) {
++                if (kv.first >= nSlots) continue;
++                const float x = slots[kv.first][0], y = slots[kv.first][1], z = slots[kv.first][2];
++                const float wx = m.m0.x() * x + m.m0.y() * y + m.m0.z() * z + m.m0.w();
++                const float wy = m.m1.x() * x + m.m1.y() * y + m.m1.z() * z + m.m1.w();
++                const float wz = m.m2.x() * x + m.m2.y() * y + m.m2.z() * z + m.m2.w();
++                wmin[0] = std::min(wmin[0], wx);
++                wmin[1] = std::min(wmin[1], wy);
++                wmin[2] = std::min(wmin[2], wz);
++                wmax[0] = std::max(wmax[0], wx);
++                wmax[1] = std::max(wmax[1], wy);
++                wmax[2] = std::max(wmax[2], wz);
++              }
++            }
++            const auto& to0 = g_gxState.loadedTextures[0];
++            std::fprintf(stderr,
++                         "[curtain.used] uniq=%zu aabb=(%g %g %g)..(%g %g %g) world=(%g %g %g)..(%g %g %g) "
++                         "maxEdge=%g cull=%d blend=%d tex=%ux%u fmt=%d map=%d data=%p curPn=%u mtx="
++                         "[%g %g %g %g | %g %g %g %g | %g %g %g %g]\n",
++                         firstOrd.size(), umin[0], umin[1], umin[2], umax[0], umax[1], umax[2], wmin[0], wmin[1],
++                         wmin[2], wmax[0], wmax[1], wmax[2], maxEdge, (int)g_gxState.cullMode, (int)g_gxState.blendMode,
++                         (unsigned)to0.width(), (unsigned)to0.height(), (int)to0.format(),
++                         (int)g_gxState.tevStages[0].texMapId, (const void*)to0.data, slot, m.m0.x(), m.m0.y(), m.m0.z(),
++                         m.m0.w(), m.m1.x(), m.m1.y(), m.m1.z(), m.m1.w(), m.m2.x(), m.m2.y(), m.m2.z(), m.m2.w());
++            // Lowest / highest used verts by Y (hem candidates) + world Y after current mtx.
++            struct Ext {
++              u32 idx;
++              float y;
++            };
++            std::vector<Ext> byY;
++            byY.reserve(firstOrd.size());
++            for (auto& kv : firstOrd) {
++              if (kv.first >= nSlots) continue;
++              byY.push_back({kv.first, slots[kv.first][1]});
++            }
++            std::sort(byY.begin(), byY.end(), [](const Ext& a, const Ext& b) { return a.y < b.y; });
++            auto worldY = [&](u32 idx) {
++              const float x = slots[idx][0], y = slots[idx][1], z = slots[idx][2];
++              return m.m1.x() * x + m.m1.y() * y + m.m1.z() * z + m.m1.w();
++            };
++            auto worldZ = [&](u32 idx) {
++              const float x = slots[idx][0], y = slots[idx][1], z = slots[idx][2];
++              return m.m2.x() * x + m.m2.y() * y + m.m2.z() * z + m.m2.w();
++            };
++            std::fprintf(stderr, "[curtain.hem]");
++            for (size_t i = 0; i < std::min<size_t>(4, byY.size()); ++i) {
++              const u32 idx = byY[i].idx;
++              std::fprintf(stderr, " lo%zu=idx%u model=(%g %g %g) wy=%g wz=%g", i, idx, slots[idx][0], slots[idx][1],
++                           slots[idx][2], worldY(idx), worldZ(idx));
++            }
++            for (size_t i = 0; i < std::min<size_t>(2, byY.size()); ++i) {
++              const u32 idx = byY[byY.size() - 1 - i].idx;
++              std::fprintf(stderr, " hi%zu=idx%u model=(%g %g %g) wy=%g wz=%g", i, idx, slots[idx][0], slots[idx][1],
++                           slots[idx][2], worldY(idx), worldZ(idx));
++            }
++            std::fprintf(stderr, "\n");
++          }
++          static int idxListLogs = 0;
++          static int slotDumpLogs = 0;
++          static unsigned idxListEpoch = ~0u;
++          if (epoch != idxListEpoch) {
++            idxListEpoch = epoch;
++            idxListLogs = 0;
++            slotDumpLogs = 0;
++          }
++          if (arr.size == 684u && slotDumpLogs++ < 1) {
++            std::fprintf(stderr, "[curtain.slots] n=%u used_bitmap:", nSlots);
++            for (u32 i = 0; i < nSlots; ++i) {
++              const int u = firstOrd.contains(i) ? 1 : 0;
++              std::fprintf(stderr, "\n  [%u] u=%d be=(%g %g %g) d=%g", i, u, slots[i][0], slots[i][1], slots[i][2],
++                           slotDist[i]);
++            }
++            std::fprintf(stderr, "\n");
++          }
++          if (arr.size == 684u && idxListLogs++ < 3) {
++            std::string used;
++            std::vector<u32> keys;
++            keys.reserve(firstOrd.size());
++            for (auto& kv : firstOrd) keys.push_back(kv.first);
++            std::sort(keys.begin(), keys.end());
++            for (u32 k : keys) used += fmt::format("{} ", k);
++            std::fprintf(stderr, "[curtain.idx] size=684 used(%zu): %s| spikes:", firstOrd.size(), used.c_str());
++            for (u32 s : spikeIdx) std::fprintf(stderr, " %u", s);
++            std::fprintf(stderr, "\n");
++          }
++          struct SlotStat {
++            u32 hash = 0;
++            u32 hits = 0;
++            u32 same = 0;
++          };
++          static absl::flat_hash_map<u64, SlotStat> slotStats;
++          u32 dumped = 0;
++          for (u32 idx : spikeIdx) {
++            if (dumped >= 16) break;
++            const u8* pp = static_cast<const u8*>(arr.data) + idx * arr.stride;
++            char hex[40]{};
++            for (int b = 0; b < 12; ++b) std::snprintf(hex + b * 2, 3, "%02x", pp[b]);
++            const float be[3] = {slots[idx][0], slots[idx][1], slots[idx][2]};
++            const float le[3] = {spm_bbox_comp(pp, GX_F32, 0, false), spm_bbox_comp(pp + 4, GX_F32, 0, false),
++                                 spm_bbox_comp(pp + 8, GX_F32, 0, false)};
++            u32 h = 2166136261u;
++            for (int b = 0; b < 12; ++b) {
++              h ^= pp[b];
++              h *= 16777619u;
++            }
++            const u64 key = (u64(reinterpret_cast<uintptr_t>(arr.data)) << 20) ^ idx;
++            auto& st = slotStats[key];
++            if (st.hits == 0) {
++              st.hash = h;
++              st.same = 1;
++            } else if (st.hash == h) {
++              ++st.same;
++            } else {
++              st.hash = h;
++              st.same = 1;
++            }
++            ++st.hits;
++            const auto it = firstOrd.find(idx);
++            const int referenced = it != firstOrd.end() ? 1 : 0;
++            const u32 ord = referenced ? it->second : ~0u;
++            u32 n0 = 0, n1 = 0, n2 = 0, i0 = 0, i1 = 0, i2 = 0;
++            if (referenced) {
++              n0 = ord > 0 ? ord - 1 : ord;
++              n1 = ord;
++              n2 = ord + 1 < vtxCount ? ord + 1 : ord;
++              auto idxAt = [&](u32 o) -> u32 {
++                const u8* vv = data + pos + o * vtxSize + pre;
++                return pd == GX_INDEX8 ? vv[0]
++                                       : (bigEndian ? u32((vv[0] << 8) | vv[1]) : u32(vv[0] | (vv[1] << 8)));
++              };
++              i0 = idxAt(n0);
++              i1 = idxAt(n1);
++              i2 = idxAt(n2);
++            }
++            const bool inTail = referenced && curtainTailStart != ~0u && ord >= curtainTailStart;
++            std::fprintf(stderr,
++                         "[curtain.v] idx=%u ref=%d ord=%d d=%g be=(%g %g %g) le=(%g %g %g) hex=%s "
++                         "hash=%08x hits=%u same=%u inTail32=%d tri_ord=%u,%u,%u tri_idx=%u,%u,%u\n",
++                         idx, referenced, referenced ? (int)ord : -1, slotDist[idx], be[0], be[1], be[2], le[0], le[1],
++                         le[2], hex, h, st.hits, st.same, (int)inTail, n0, n1, n2, i0, i1, i2);
++            ++dumped;
++          }
++          }  // interesting body
++        }    // interesting
++      }      // ok >= 8
++    }        // sizeHit INDEX16 F32
++    // Secondary: other INDEX16 F32 DL draws whose used AABB is unusually tall/deep (not only 684/3828).
++    else if (g_replayingDisplayList && (pd == GX_INDEX8 || pd == GX_INDEX16) && pf.type == GX_F32 && arr.stride == 12 &&
++             arr.data && arr.size >= 48 && vtxCount >= 4 && !sizeHit) {
++      const u32 pre = matrix_index_prefix_size(fmt);
++      const u32 nSlots = arr.size / arr.stride;
++      if (nSlots >= 4 && nSlots <= 4096) {
++        float umin[3] = {1e30f, 1e30f, 1e30f}, umax[3] = {-1e30f, -1e30f, -1e30f};
++        u32 minIdx = ~0u, maxIdx = 0;
++        absl::flat_hash_set<u32> uniq;
++        for (u32 i = 0; i < vtxCount; ++i) {
++          const u8* ip = data + pos + i * vtxSize + pre;
++          const u32 idx = pd == GX_INDEX8 ? ip[0] : (bigEndian ? u32((ip[0] << 8) | ip[1]) : u32(ip[0] | (ip[1] << 8)));
++          if (idx >= nSlots) continue;
++          minIdx = std::min(minIdx, idx);
++          maxIdx = std::max(maxIdx, idx);
++          uniq.insert(idx);
++          const u8* pp = static_cast<const u8*>(arr.data) + idx * arr.stride;
++          const float x = spm_bbox_comp(pp, GX_F32, 0, true);
++          const float y = spm_bbox_comp(pp + 4, GX_F32, 0, true);
++          const float z = spm_bbox_comp(pp + 8, GX_F32, 0, true);
++          if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
++          umin[0] = std::min(umin[0], x);
++          umin[1] = std::min(umin[1], y);
++          umin[2] = std::min(umin[2], z);
++          umax[0] = std::max(umax[0], x);
++          umax[1] = std::max(umax[1], y);
++          umax[2] = std::max(umax[2], z);
++        }
++        const float ySpan = umax[1] - umin[1];
++        const float zSpan = umax[2] - umin[2];
++        const float diag = std::hypot(umax[0] - umin[0], ySpan, zSpan);
++        // Tip-like depth or floor-reaching height on a non-curtain-sized array.
++        if (uniq.size() >= 8 && (zSpan > 25.f || ySpan > 14.f || diag > 40.f || umin[2] < -40.f)) {
++          static int otherLogs = 0;
++          static unsigned otherEpoch = ~0u;
++          const unsigned epoch = g_curtainTraceEpoch.load(std::memory_order_relaxed);
++          if (epoch != otherEpoch) {
++            otherEpoch = epoch;
++            otherLogs = 0;
++          }
++          if (otherLogs++ < 40) {
++            std::fprintf(stderr,
++                         "[curtain.other] f=%u prim=%u n=%u size=%u nSlots=%u uniq=%zu idx=%u..%u "
++                         "aabb=(%g %g %g)..(%g %g %g) ySpan=%g zSpan=%g diag=%g curPn=%u\n",
++                         gfx::current_frame(), (unsigned)prim, (unsigned)vtxCount, (unsigned)arr.size, nSlots,
++                         uniq.size(), minIdx, maxIdx, umin[0], umin[1], umin[2], umax[0], umax[1], umax[2], ySpan, zSpan,
++                         diag, (unsigned)g_gxState.currentPnMtx);
++          }
++        }
++      }
++    }
++  }          // curtain capture window / env
++  // NO100F_SKIP_CURTAIN_PANEL=1: A/B — drop the main i001 curtain POS arrays (684 / 3828).
++  // If spikes vanish, those draws are the source (deep-idx skip already falsified).
++  if (static const int skipCurtainPanel = [] {
++        const char* e = std::getenv("NO100F_SKIP_CURTAIN_PANEL");
++        return e ? std::atoi(e) : 0;
++      }();
++      skipCurtainPanel && g_replayingDisplayList) {
++    const GXAttrType pdPanel = g_gxState.vtxDesc[GX_VA_POS];
++    const auto& arrPanel = g_gxState.arrays[GX_VA_POS];
++    const auto& pfPanel = g_gxState.vtxFmts[fmt].attrs[GX_VA_POS];
++    if ((pdPanel == GX_INDEX8 || pdPanel == GX_INDEX16) && pfPanel.type == GX_F32 && arrPanel.stride == 12 &&
++        (arrPanel.size == 684u || arrPanel.size == 3828u)) {
++      if (static int n = 0; n++ < 20)
++        std::fprintf(stderr, "[curtain.skippanel] n=%u size=%u\n", (unsigned)vtxCount, (unsigned)arrPanel.size);
++      pos += totalVtxBytes;
++      return true;
++    }
++  }
++  // NO100F_SKIP_CURTAIN_HEM=1: A/B — drop DL INDEX16 F32 draws whose used POS AABB covers the
++  // confirmed i001 curtain hem corner (~10.881, 5.86, -10.91) and also pierces into the room
++  // (zmax > -5). Mode-2 deep skip left these as survivors (sizes 10764/22152/7728/228/…) while
++  // panel+deep mode-1 still showed window shards. Curtain-specific, not generic span thresholds.
++  if (static const int skipCurtainHem = [] {
++        const char* e = std::getenv("NO100F_SKIP_CURTAIN_HEM");
++        return e ? std::atoi(e) : 0;
++      }();
++      skipCurtainHem && g_replayingDisplayList) {
++    const GXAttrType pdHem = g_gxState.vtxDesc[GX_VA_POS];
++    const auto& arrHem = g_gxState.arrays[GX_VA_POS];
++    const auto& pfHem = g_gxState.vtxFmts[fmt].attrs[GX_VA_POS];
++    if ((pdHem == GX_INDEX8 || pdHem == GX_INDEX16) && pfHem.type == GX_F32 && arrHem.stride == 12 && arrHem.data &&
++        arrHem.size >= 48 && vtxCount >= 3 && arrHem.size != 684u && arrHem.size != 3828u) {
++      const u32 pre = matrix_index_prefix_size(fmt);
++      const u32 nSlots = arrHem.size / arrHem.stride;
++      float umin[3] = {1e30f, 1e30f, 1e30f}, umax[3] = {-1e30f, -1e30f, -1e30f};
++      u32 ok = 0;
++      for (u32 i = 0; i < vtxCount; ++i) {
++        const u8* ip = data + pos + i * vtxSize + pre;
++        const u32 idx =
++            pdHem == GX_INDEX8 ? ip[0] : (bigEndian ? u32((ip[0] << 8) | ip[1]) : u32(ip[0] | (ip[1] << 8)));
++        if (idx >= nSlots) continue;
++        const u8* pp = static_cast<const u8*>(arrHem.data) + idx * arrHem.stride;
++        const float x = spm_bbox_comp(pp, GX_F32, 0, true);
++        const float y = spm_bbox_comp(pp + 4, GX_F32, 0, true);
++        const float z = spm_bbox_comp(pp + 8, GX_F32, 0, true);
++        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
++        umin[0] = std::min(umin[0], x);
++        umin[1] = std::min(umin[1], y);
++        umin[2] = std::min(umin[2], z);
++        umax[0] = std::max(umax[0], x);
++        umax[1] = std::max(umax[1], y);
++        umax[2] = std::max(umax[2], z);
++        ++ok;
++      }
++      if (ok >= 3) {
++        // Mode-2 survivors that still spiked shared the size=684 hem X (≈10.881) and extended
++        // past the wall into room Z (zmax > -5), including sheets entirely at z≈10 (22152/22704)
++        // and wall→room needles (10764/7728/228). Height band avoids unrelated x≈11 props.
++        constexpr float kHemX = 10.881f;
++        const bool touchesHemX = umin[0] <= kHemX + 0.05f && umax[0] >= kHemX - 0.2f;
++        const bool curtainYBand = umax[1] >= 5.f && umin[1] <= 16.f;
++        const bool piercesOrRoom = umax[2] > -5.f;
++        if (touchesHemX && curtainYBand && piercesOrRoom) {
++          if (static int n = 0; n++ < 40)
++            std::fprintf(stderr,
++                         "[curtain.skiphem] n=%u size=%u aabb=(%g %g %g)..(%g %g %g) texMap=%d cull=%d\n",
++                         (unsigned)vtxCount, (unsigned)arrHem.size, umin[0], umin[1], umin[2], umax[0], umax[1],
++                         umax[2], (int)g_gxState.tevStages[0].texMapId, (int)g_gxState.cullMode);
++          pos += totalVtxBytes;
++          return true;
++        }
++      }
++    }
++  }
++  // NO100F_SKIP_DEEP_IDX=1: A/B — drop DL INDEX16 F32 draws whose used POS AABB is
++  // needle-deep / sky-tall. Dolphin FIFO has the same draws (e.g. n=285 idx 890..1064
++  // with ~29-unit edges); if skipping clears the purple spikes, chase visibility
++  // (cull/tev/degen) rather than POS content.
++  if (static const int skipDeepIdx = [] {
++        const char* e = std::getenv("NO100F_SKIP_DEEP_IDX");
++        return e ? std::atoi(e) : 0;
++      }();
++      skipDeepIdx && g_replayingDisplayList) {
++    const GXAttrType pdDeep = g_gxState.vtxDesc[GX_VA_POS];
++    const auto& arrDeep = g_gxState.arrays[GX_VA_POS];
++    const auto& pfDeep = g_gxState.vtxFmts[fmt].attrs[GX_VA_POS];
++    if ((pdDeep == GX_INDEX8 || pdDeep == GX_INDEX16) && pfDeep.type == GX_F32 && arrDeep.stride == 12 &&
++        arrDeep.data && arrDeep.size >= 48 && vtxCount >= 3) {
++      const u32 pre = matrix_index_prefix_size(fmt);
++      const u32 nSlots = arrDeep.size / arrDeep.stride;
++      float umin[3] = {1e30f, 1e30f, 1e30f}, umax[3] = {-1e30f, -1e30f, -1e30f};
++      u32 ok = 0;
++      for (u32 i = 0; i < vtxCount; ++i) {
++        const u8* ip = data + pos + i * vtxSize + pre;
++        const u32 idx =
++            pdDeep == GX_INDEX8 ? ip[0] : (bigEndian ? u32((ip[0] << 8) | ip[1]) : u32(ip[0] | (ip[1] << 8)));
++        if (idx >= nSlots) continue;
++        const u8* pp = static_cast<const u8*>(arrDeep.data) + idx * arrDeep.stride;
++        const float x = spm_bbox_comp(pp, GX_F32, 0, true);
++        const float y = spm_bbox_comp(pp + 4, GX_F32, 0, true);
++        const float z = spm_bbox_comp(pp + 8, GX_F32, 0, true);
++        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
++        umin[0] = std::min(umin[0], x);
++        umin[1] = std::min(umin[1], y);
++        umin[2] = std::min(umin[2], z);
++        umax[0] = std::max(umax[0], x);
++        umax[1] = std::max(umax[1], y);
++        umax[2] = std::max(umax[2], z);
++        ++ok;
++      }
++      if (ok >= 3) {
++        const float xSpan = umax[0] - umin[0];
++        const float ySpan = umax[1] - umin[1];
++        const float zSpan = umax[2] - umin[2];
++        const float diag = std::hypot(xSpan, ySpan, zSpan);
++        // Mode 1: original (zSpan>25 || ySpan>40). Mode 2+: also diag>30 / zSpan>15 / xSpan>40
++        // (both-skips A/B still left window spikes — survivors had diag~64 with zSpan~17).
++        const bool hit = skipDeepIdx >= 2
++                             ? (zSpan > 15.f || ySpan > 20.f || xSpan > 40.f || diag > 30.f || umin[2] < -30.f)
++                             : (zSpan > 25.f || ySpan > 40.f);
++        if (hit) {
++          if (static int n = 0; n++ < 40)
++            std::fprintf(stderr, "[curtain.skipdeep] n=%u size=%u xSpan=%g ySpan=%g zSpan=%g diag=%g\n",
++                         (unsigned)vtxCount, (unsigned)arrDeep.size, xSpan, ySpan, zSpan, diag);
++          pos += totalVtxBytes;
++          return true;
++        }
++      }
++    }
++  }
++  // NO100F_SKIP_DEEP_IDX>=2 + curtain trace: log INDEX16 F32 DL survivors with large used AABB
++  // (find the third spike path after panel+deep skips).
++  if (static const int skipDeepIdxLog = [] {
++        const char* e = std::getenv("NO100F_SKIP_DEEP_IDX");
++        return e ? std::atoi(e) : 0;
++      }();
++      skipDeepIdxLog >= 2 && No100f_CurtainTraceActive() && g_replayingDisplayList) {
++    const GXAttrType pdS = g_gxState.vtxDesc[GX_VA_POS];
++    const auto& arrS = g_gxState.arrays[GX_VA_POS];
++    const auto& pfS = g_gxState.vtxFmts[fmt].attrs[GX_VA_POS];
++    if ((pdS == GX_INDEX8 || pdS == GX_INDEX16) && pfS.type == GX_F32 && arrS.stride == 12 && arrS.data &&
++        arrS.size >= 48 && vtxCount >= 3 && arrS.size != 684u && arrS.size != 3828u) {
++      const u32 pre = matrix_index_prefix_size(fmt);
++      const u32 nSlots = arrS.size / arrS.stride;
++      float umin[3] = {1e30f, 1e30f, 1e30f}, umax[3] = {-1e30f, -1e30f, -1e30f};
++      u32 ok = 0, minIdx = ~0u, maxIdx = 0;
++      for (u32 i = 0; i < vtxCount; ++i) {
++        const u8* ip = data + pos + i * vtxSize + pre;
++        const u32 idx = pdS == GX_INDEX8 ? ip[0] : (bigEndian ? u32((ip[0] << 8) | ip[1]) : u32(ip[0] | (ip[1] << 8)));
++        if (idx >= nSlots) continue;
++        minIdx = std::min(minIdx, idx);
++        maxIdx = std::max(maxIdx, idx);
++        const u8* pp = static_cast<const u8*>(arrS.data) + idx * arrS.stride;
++        const float x = spm_bbox_comp(pp, GX_F32, 0, true);
++        const float y = spm_bbox_comp(pp + 4, GX_F32, 0, true);
++        const float z = spm_bbox_comp(pp + 8, GX_F32, 0, true);
++        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
++        umin[0] = std::min(umin[0], x);
++        umin[1] = std::min(umin[1], y);
++        umin[2] = std::min(umin[2], z);
++        umax[0] = std::max(umax[0], x);
++        umax[1] = std::max(umax[1], y);
++        umax[2] = std::max(umax[2], z);
++        ++ok;
++      }
++      if (ok >= 3) {
++        const float diag = std::hypot(umax[0] - umin[0], umax[1] - umin[1], umax[2] - umin[2]);
++        if (diag > 12.f) {
++          static int survLogs = 0;
++          static unsigned survEpoch = ~0u;
++          const unsigned epoch = g_curtainTraceEpoch.load(std::memory_order_relaxed);
++          if (epoch != survEpoch) {
++            survEpoch = epoch;
++            survLogs = 0;
++          }
++          if (survLogs++ < 60)
++            std::fprintf(stderr,
++                         "[curtain.survive] n=%u size=%u idx=%u..%u aabb=(%g %g %g)..(%g %g %g) diag=%g "
++                         "texMap=%d cull=%d\n",
++                         (unsigned)vtxCount, (unsigned)arrS.size, minIdx, maxIdx, umin[0], umin[1], umin[2], umax[0],
++                         umax[1], umax[2], diag, (int)g_gxState.tevStages[0].texMapId, (int)g_gxState.cullMode);
++        }
++      }
++    }
++  }
+   if (!has_complete_primitive(prim, vtxCount)) {
+     pos += totalVtxBytes;
+     return true;
+@@ -3073,6 +3714,9 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
+     g_gxState.stateDirty = true;
+   }
+ 
++  // POS-size skip lives in gfx::push_draw_command (matches owner-dump meta.posSize).
++  // Early FIFO skips here only hit strips and left the triangle curtain batches drawing.
++
+   DrawData* mergeTarget = nullptr;
+   // NSMBW debugging: NSMBW_NO_MERGE turns draw merging off.
+   static const int noMergeMode = [] {
+@@ -3152,7 +3796,7 @@ static bool handle_draw(u8 cmd, const u8* data, u32& pos, u32 size, bool bigEndi
+   handle_draw_unmerged(prim, fmt, vtxCount, vertRange,
+                        matrixUsage.mask, matrixUsage.topologySignature,
+                        interpolationIdentityActive ? draw_geometry_signature(fmt, vertices, vtxCount, vtxSize) : 0,
+-                       interpolationIdentityActive);
++                       interpolationIdentityActive, vertices, vtxSize, bigEndian);
+   if (fullScreenQuad) {
+     g_gxState.proj = widenedProj;
+     g_gxState.stateDirty = true;
+@@ -3182,7 +3826,8 @@ namespace aurora::gx::fifo {
+ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+                                  gfx::Range vertRange, uint16_t usedPnMtxMask,
+                                  HashType matrixTopologySignature,
+-                                 HashType geometrySignature, bool interpolationIdentityActive) {
++                                 HashType geometrySignature, bool interpolationIdentityActive,
++                                 const uint8_t* vtxBytes, u32 vtxStride, bool vtxBigEndian) {
+   ZoneScoped;
+   if (g_spmDrawLimit != ~0u && g_spmDrawIdx++ >= g_spmDrawLimit) return;
+   // NO100F diagnostic (env NO100F_SKIP_DRAWS=a-b): skip draws a..b of every frame to bisect a bad draw (use NSMBW_NO_MERGE=1).
+@@ -3234,8 +3879,59 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+   // SPM diagnostic (env SPM_FLAT_TEST): map-tile class (fmt0 strips, CMPR map0) drawn 1 = flat white, 2 = flat white over
+   // everything (no depth), 3 = texture colour only, 4 = every draw flat white, 5 = every non-quad draw flat white (quads = backdrop/HUD), 6 = depth-tested quads white, 7 = 2 + culling off, 10 = 7 + fixed z -0.95. Shows whether missing walls/floors rasterize at all.
+   static const int flatTest = [] { const char* e = std::getenv("SPM_FLAT_TEST"); return e ? std::atoi(e) : 0; }();
++  // Curtain ownership: NO100F_FLAT_POS_SIZES=12648,6540 paints those POS pools flat white (geometry kept).
++  // Optional Play/curtain-flat-events.txt range a-b paints only those host events white.
++  // Re-read env each draw so live A/B works (do not cache in a function-local static).
+   struct FlatSave { TevStage st0; u8 numTev; AlphaCompare ac; GXBlendMode bm; bool dc, du; GXCullMode cull; Mat4x4<float> proj; };
+   std::optional<FlatSave> flatSave;
++  auto applyFlatWhite = [&] {
++    flatSave = FlatSave{g_gxState.tevStages[0], g_gxState.numTevStages, g_gxState.alphaCompare, g_gxState.blendMode,
++                        g_gxState.depthCompare, g_gxState.depthUpdate, g_gxState.cullMode, g_gxState.proj};
++    auto& st = g_gxState.tevStages[0];
++    st.colorPass = {GX_CC_ZERO, GX_CC_ZERO, GX_CC_ZERO, GX_CC_ONE};
++    st.alphaPass = {GX_CA_ZERO, GX_CA_ZERO, GX_CA_ZERO, GX_CA_KONST};
++    st.kaSel = GX_TEV_KASEL_1;
++    st.colorOp = {};
++    st.alphaOp = {};
++    g_gxState.numTevStages = 1;
++    g_gxState.alphaCompare = {};
++    g_gxState.blendMode = GX_BM_NONE;
++    g_gxState.pipelineStateGeneration = next_gx_state_epoch();
++  };
++  if (const char* list = std::getenv("NO100F_FLAT_POS_SIZES"); list && *list) {
++    const uint32_t psz = g_gxState.arrays[GX_VA_POS].size;
++    bool hit = false;
++    unsigned v = 0;
++    const char* p = list;
++    while (*p) {
++      if (std::sscanf(p, "%u", &v) == 1 && v == psz) {
++        hit = true;
++        break;
++      }
++      while (*p && *p != ',') ++p;
++      if (*p == ',') ++p;
++    }
++    if (hit) applyFlatWhite();
++  }
++  if (!flatSave) {
++    // Live single-event flat paint (Play/curtain-flat-events.txt = a-b), same CWD as skip files.
++    char flatBuf[64] = {};
++#if defined(_WIN32)
++    FILE* ff = _fsopen("curtain-flat-events.txt", "r", _SH_DENYNO);
++#else
++    FILE* ff = std::fopen("curtain-flat-events.txt", "rb");
++#endif
++    if (ff) {
++      if (std::fgets(flatBuf, sizeof(flatBuf), ff)) {
++        unsigned a = 0, b = 0;
++        if (std::sscanf(flatBuf, "%u-%u", &a, &b) == 2) {
++          const uint32_t ev = gfx::gpu_owner_peek_next_event();
++          if (ev >= a && ev <= b) applyFlatWhite();
++        }
++      }
++      std::fclose(ff);
++    }
++  }
+   if (flatTest == 8) for (auto& a : g_gxState.arrays) a.cachedRange = {};  // 8 = re-upload vertex arrays every draw
+   // 16 = skip untextured vertex-colour draws with no texgen (are they a silhouette pass that hides the textured ground?)
+   if (flatTest == 16 && g_gxState.tevStages[0].texMapId == GX_TEXMAP_NULL && g_gxState.tevStages[0].colorPass.d == GX_CC_RASC &&
+@@ -3282,10 +3978,93 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+     g_gxState.pipelineStateGeneration = next_gx_state_epoch();
+   }
+   // Callers hold the renderer GPU mutex for the whole drain (process() and submit_raw_draw); taking it again per draw only cost a recursive re-entry.
+-  const auto& indexTemplate = cached_index_template(prim, vtxCount);
+-  const u32 numIndices = indexTemplate.indexCount;
+-  const gfx::Range idxRange = gfx::push_indices(ArrayRef<u16>{
+-      indexTemplate.indices.data(), indexTemplate.indices.size()});
++  // NO100F_DROP_DEGEN_IDX: 1 = drop triangle-list tris with duplicate POS indices on tip-bearing
++  // arrays; 2 = also drop tris with model-space edge > 20. Dolphin FIFO has these needles too;
++  // A/B whether Aurora rasterizes them as visible spikes while hardware does not.
++  static const int dropDegenIdx = [] {
++    const char* e = std::getenv("NO100F_DROP_DEGEN_IDX");
++    return e ? std::atoi(e) : 0;
++  }();
++  std::vector<u16> degenIdxBuf;
++  ArrayRef<u16> idxRef{};
++  u32 numIndices = 0;
++  GXPrimitive drawPrim = prim;  // may become TRIANGLES if we expand+filter a strip
++  const auto& posArr = g_gxState.arrays[GX_VA_POS];
++  const bool tipBearing = [&] {
++    if (!posArr.data || posArr.stride != 12 || posArr.size < 12) return false;
++    const auto* pp = static_cast<const u8*>(posArr.data);
++    const float x = spm_bbox_comp(pp, GX_F32, 0, true);
++    const float y = spm_bbox_comp(pp + 4, GX_F32, 0, true);
++    const float z = spm_bbox_comp(pp + 8, GX_F32, 0, true);
++    return std::hypot(x + 2.2121f, y - 2.4375f, z + 53.4862f) < 0.08f;
++  }();
++  if (dropDegenIdx && tipBearing && (prim == GX_TRIANGLES || prim == GX_TRIANGLESTRIP) && vtxBytes && vtxStride &&
++      vtxCount >= 3 &&
++      (g_gxState.vtxDesc[GX_VA_POS] == GX_INDEX8 || g_gxState.vtxDesc[GX_VA_POS] == GX_INDEX16)) {
++    const u32 pre = matrix_index_prefix_size(fmt);
++    const GXAttrType pd = g_gxState.vtxDesc[GX_VA_POS];
++    const u32 nSlots = posArr.stride ? posArr.size / posArr.stride : 0;
++    auto posIdxAt = [&](u32 vi) -> u32 {
++      const u8* ip = vtxBytes + vi * vtxStride + pre;
++      return pd == GX_INDEX8 ? ip[0]
++                             : (vtxBigEndian ? u32((ip[0] << 8) | ip[1]) : u32(ip[0] | (ip[1] << 8)));
++    };
++    auto slotPos = [&](u32 idx, float out[3]) {
++      const u8* pp = static_cast<const u8*>(posArr.data) + idx * posArr.stride;
++      out[0] = spm_bbox_comp(pp, GX_F32, 0, true);
++      out[1] = spm_bbox_comp(pp + 4, GX_F32, 0, true);
++      out[2] = spm_bbox_comp(pp + 8, GX_F32, 0, true);
++    };
++    auto emitIfKeep = [&](u16 i0, u16 i1, u16 i2, u32& dropped) {
++      const u32 ia = posIdxAt(i0), ib = posIdxAt(i1), ic = posIdxAt(i2);
++      if (ia >= nSlots || ib >= nSlots || ic >= nSlots) return;
++      bool drop = (ia == ib || ib == ic || ia == ic);
++      if (!drop && dropDegenIdx >= 2) {
++        float a[3], b[3], c[3];
++        slotPos(ia, a);
++        slotPos(ib, b);
++        slotPos(ic, c);
++        const float e0 = std::hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
++        const float e1 = std::hypot(b[0] - c[0], b[1] - c[1], b[2] - c[2]);
++        const float e2 = std::hypot(c[0] - a[0], c[1] - a[1], c[2] - a[2]);
++        drop = std::max({e0, e1, e2}) > 20.f;
++      }
++      if (drop) {
++        ++dropped;
++        return;
++      }
++      degenIdxBuf.push_back(i0);
++      degenIdxBuf.push_back(i1);
++      degenIdxBuf.push_back(i2);
++    };
++    u32 dropped = 0;
++    degenIdxBuf.reserve(vtxCount * 3);
++    if (prim == GX_TRIANGLES) {
++      for (u32 t = 0; t + 2 < vtxCount; t += 3)
++        emitIfKeep(static_cast<u16>(t), static_cast<u16>(t + 1), static_cast<u16>(t + 2), dropped);
++    } else {
++      // Expand strip → tris (same winding flip as prepare_idx_template), then filter.
++      for (u32 v = 2; v < vtxCount; ++v) {
++        if ((v & 1) == 0)
++          emitIfKeep(static_cast<u16>(v - 2), static_cast<u16>(v - 1), static_cast<u16>(v), dropped);
++        else
++          emitIfKeep(static_cast<u16>(v - 1), static_cast<u16>(v - 2), static_cast<u16>(v), dropped);
++      }
++    }
++    idxRef = {degenIdxBuf.data(), degenIdxBuf.size()};
++    numIndices = static_cast<u32>(degenIdxBuf.size());
++    drawPrim = GX_TRIANGLES;  // expanded+filtered strip indices are a triangle list
++    if (static int n = 0; n++ < 40)
++      std::fprintf(stderr, "[curtain.dropdegen] prim=%u n=%u size=%u kept_idx=%u dropped_tris=%u tip=%d mode=%d\n",
++                   (unsigned)prim, (unsigned)vtxCount, (unsigned)posArr.size, numIndices, dropped, (int)tipBearing,
++                   dropDegenIdx);
++    if (numIndices < 3) return;
++  } else {
++    const auto& indexTemplate = cached_index_template(prim, vtxCount);
++    numIndices = indexTemplate.indexCount;
++    idxRef = {indexTemplate.indices.data(), indexTemplate.indices.size()};
++  }
++  const gfx::Range idxRange = gfx::push_indices(idxRef);
+ 
+   // Build pipeline, bind groups, and push draw command
+   BindGroupRanges ranges{};
+@@ -3301,7 +4080,42 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+     ranges.vaRanges[i - GX_VA_POS] = array.cachedRange;
+   }
+ 
+-  const auto& pipelineState = resolve_pipeline_state(prim, fmt);
++  // Issue #2 repair (A/B only): NO100F_NTG0_REPAIR=1 raises numTexGens when TEV samples but count is 0.
++  if (static const int ntg0Repair = [] {
++        const char* e = std::getenv("NO100F_NTG0_REPAIR");
++        return e ? std::atoi(e) : 0;
++      }();
++      ntg0Repair && g_gxState.numTexGens == 0) {
++    u8 need = 0;
++    for (u8 si = 0; si < g_gxState.numTevStages && si < MaxTevStages; ++si) {
++      const auto& st = g_gxState.tevStages[si];
++      if (st.texMapId == GX_TEXMAP_NULL || !tev_stage_combiner_uses_texture(st)) continue;
++      const u32 c = underlying(st.texCoordId);
++      need = std::max<u8>(need, c < MaxTexCoord ? static_cast<u8>(c + 1u) : u8{1});
++    }
++    if (need > 0) {
++      bool hasTexAttr = false;
++      for (int a = GX_VA_TEX0; a <= GX_VA_TEX7; ++a) {
++        if (g_gxState.vtxDesc[a] != GX_NONE) {
++          hasTexAttr = true;
++          break;
++        }
++      }
++      const auto src0 = g_gxState.tcgs[0].src;
++      const bool hasTcgSrc = (src0 >= GX_TG_TEX0 && src0 <= GX_TG_TEX7) || src0 == GX_TG_POS || src0 == GX_TG_NRM ||
++                             src0 == GX_TG_COLOR0;
++      if (hasTexAttr || hasTcgSrc) {
++        if (static int n = 0; n++ < 40)
++          std::fprintf(stderr, "[ntg0.repair] need=%u texMap=%d texAttr=%d tcgSrc=%d posSize=%u\n", need,
++                       (int)g_gxState.tevStages[0].texMapId, (int)hasTexAttr, (int)src0,
++                       (unsigned)g_gxState.arrays[GX_VA_POS].size);
++        g_gxState.numTexGens = need;
++        mark_pipeline_state_dirty();
++      }
++    }
++  }
++
++  const auto& pipelineState = resolve_pipeline_state(drawPrim, fmt);
+   const auto& info = pipelineState.shaderInfo;
+ 
+   resolve_sampled_textures(info);
+@@ -3341,6 +4155,102 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+   } else if (prim == GX_POINTS) {
+     instanceCount = vtxCount;
+   }
++  {
++    const auto& posArrMeta = g_gxState.arrays[GX_VA_POS];
++    gfx::GpuOwnerDrawMeta meta{};
++    meta.kind = "gx";
++    meta.fifoCmd = static_cast<uint32_t>(prim) | (static_cast<uint32_t>(fmt) & 7u);
++    meta.vat = static_cast<uint32_t>(fmt);
++    meta.primitive = static_cast<uint32_t>(prim);
++    meta.fifoVertexCount = vtxCount;
++    meta.expandedTriangleCount = numIndices / 3u;
++    meta.vertexArrayGuestBase = reinterpret_cast<uintptr_t>(posArrMeta.data);
++    meta.posSize = posArrMeta.size;
++    meta.posStride = posArrMeta.stride;
++    meta.shaderUniformMatrixSlot = g_gxState.currentPnMtx;
++    meta.numTexGens = g_gxState.numTexGens;
++    meta.cull = static_cast<int>(g_gxState.cullMode);
++    meta.blend = static_cast<int>(g_gxState.blendMode);
++    if (g_gxState.currentPnMtx < MaxPnMtx) {
++      std::memcpy(meta.mtx, &g_gxState.pnMtx[g_gxState.currentPnMtx].pos, sizeof(meta.mtx));
++      meta.hasMtx = true;
++    }
++    // Curtain / manor window draws: record used-index model AABB + PnMtx world AABB.
++    // Include the old 6540/12648 pools plus other strips in the live 240-265 owner band.
++    const GXAttrType pdMeta = g_gxState.vtxDesc[GX_VA_POS];
++    const bool curtainSized = posArrMeta.size == 6540u || posArrMeta.size == 12648u ||
++                              posArrMeta.size == 4440u || posArrMeta.size == 12192u ||
++                              posArrMeta.size == 11532u || posArrMeta.size == 7860u ||
++                              posArrMeta.size == 6912u || posArrMeta.size == 3456u ||
++                              posArrMeta.size == 3600u || posArrMeta.size == 1728u ||
++                              posArrMeta.size == 7872u || posArrMeta.size == 9720u ||
++                              posArrMeta.size == 7080u;
++    if (curtainSized && vtxBytes && vtxStride && posArrMeta.data &&
++        posArrMeta.stride == 12 && (pdMeta == GX_INDEX8 || pdMeta == GX_INDEX16) &&
++        g_gxState.vtxFmts[fmt].attrs[GX_VA_POS].type == GX_F32 && vtxCount >= 3) {
++      const u32 pre = matrix_index_prefix_size(fmt);
++      const u32 nSlots = posArrMeta.size / posArrMeta.stride;
++      float umin[3] = {1e30f, 1e30f, 1e30f}, umax[3] = {-1e30f, -1e30f, -1e30f};
++      float wmin[3] = {1e30f, 1e30f, 1e30f}, wmax[3] = {-1e30f, -1e30f, -1e30f};
++      u32 minI = ~0u, maxI = 0, deep = 0;
++      const bool haveMtx = g_gxState.currentPnMtx < MaxPnMtx;
++      const auto& pn = g_gxState.pnMtx[haveMtx ? g_gxState.currentPnMtx : 0].pos;
++      absl::flat_hash_set<u32> seen;
++      for (u32 vi = 0; vi < vtxCount; ++vi) {
++        const u8* ip = vtxBytes + vi * vtxStride + pre;
++        const u32 idx = pdMeta == GX_INDEX8
++                            ? ip[0]
++                            : (vtxBigEndian ? u32((ip[0] << 8) | ip[1]) : u32(ip[0] | (ip[1] << 8)));
++        if (idx >= nSlots) continue;
++        minI = std::min(minI, idx);
++        maxI = std::max(maxI, idx);
++        if (seen.insert(idx).second) {
++          const u8* pp = static_cast<const u8*>(posArrMeta.data) + idx * posArrMeta.stride;
++          const float x = spm_bbox_comp(pp, GX_F32, 0, true);
++          const float y = spm_bbox_comp(pp + 4, GX_F32, 0, true);
++          const float z = spm_bbox_comp(pp + 8, GX_F32, 0, true);
++          umin[0] = std::min(umin[0], x);
++          umin[1] = std::min(umin[1], y);
++          umin[2] = std::min(umin[2], z);
++          umax[0] = std::max(umax[0], x);
++          umax[1] = std::max(umax[1], y);
++          umax[2] = std::max(umax[2], z);
++          if (z < -15.f) ++deep;
++          if (haveMtx) {
++            // pnMtx.pos is 3x4 row-major (Dolphin/XF layout): out = M * [x,y,z,1]
++            const float wx = pn.m0.x() * x + pn.m0.y() * y + pn.m0.z() * z + pn.m0.w();
++            const float wy = pn.m1.x() * x + pn.m1.y() * y + pn.m1.z() * z + pn.m1.w();
++            const float wz = pn.m2.x() * x + pn.m2.y() * y + pn.m2.z() * z + pn.m2.w();
++            wmin[0] = std::min(wmin[0], wx);
++            wmin[1] = std::min(wmin[1], wy);
++            wmin[2] = std::min(wmin[2], wz);
++            wmax[0] = std::max(wmax[0], wx);
++            wmax[1] = std::max(wmax[1], wy);
++            wmax[2] = std::max(wmax[2], wz);
++          }
++        }
++      }
++      if (!seen.empty() && minI != ~0u) {
++        meta.hasUsed = true;
++        meta.minIdx = minI;
++        meta.maxIdx = maxI;
++        meta.uniq = static_cast<uint32_t>(seen.size());
++        meta.deepUsed = deep;
++        for (int k = 0; k < 3; ++k) {
++          meta.usedMin[k] = umin[k];
++          meta.usedMax[k] = umax[k];
++        }
++        if (haveMtx && wmin[0] < 1e29f) {
++          meta.hasWorld = true;
++          for (int k = 0; k < 3; ++k) {
++            meta.worldMin[k] = wmin[k];
++            meta.worldMax[k] = wmax[k];
++          }
++        }
++      }
++    }
++    gfx::set_gpu_owner_draw_meta(meta);
++  }
+   gfx::push_draw_command(DrawData{
+       .pipeline = pipeline,
+       .vertRange = vertRange,
+@@ -3354,7 +4264,11 @@ static void handle_draw_unmerged(GXPrimitive prim, GXVtxFmt fmt, u16 vtxCount,
+       .bindGroups = bindGroups,
+       .dstAlpha = pipelineState.dstAlpha,
+   });
+-  g_gxState.stateDirty = false;
++  // If push skipped this draw (event/size bisect), keep stateDirty so the next
++  // primitive cannot merge into the prior surviving draw across the hole.
++  const bool skipped = gfx::gpu_owner_last_push_was_skip();
++  gfx::clear_gpu_owner_draw_meta();
++  g_gxState.stateDirty = skipped ? true : false;
+   if (flatSave) {
+     g_gxState.tevStages[0] = flatSave->st0;
+     g_gxState.numTevStages = flatSave->numTev;
+diff --git a/wiicompiled/aurora-main/tests/gx_test_stubs.cpp b/wiicompiled/aurora-main/tests/gx_test_stubs.cpp
+index 8ce5fb2..8c17686 100644
+--- a/wiicompiled/aurora-main/tests/gx_test_stubs.cpp
++++ b/wiicompiled/aurora-main/tests/gx_test_stubs.cpp
+@@ -307,6 +307,12 @@ void split_staging_batch() { throw StagingCapacityError("Unexpected split in FIF
+ Vec2<uint32_t> get_render_target_size() noexcept { return s_renderTargetSize; }
+ Vec2<uint32_t> get_frame_buffer_size() noexcept { return s_renderTargetSize; }
+ uint32_t current_frame() noexcept { return s_currentFrame; }
++uint32_t current_pass_index() noexcept { return 0; }
++void set_gpu_owner_draw_meta(const GpuOwnerDrawMeta&) {}
++void clear_gpu_owner_draw_meta() {}
++bool gpu_owner_should_skip_next_draw() { return false; }
++bool gpu_owner_last_push_was_skip() noexcept { return false; }
++uint32_t gpu_owner_peek_next_event() noexcept { return 0; }
+ // The command processor keys its resolved-pipeline memo on this. The test build never changes
+ // render targets, so a fixed single-sample target matches what pipeline_ref would produce.
+ uint32_t get_sample_count() noexcept { return 1; }
+diff --git a/wiicompiled/runtime/include/wii_remote_input.h b/wiicompiled/runtime/include/wii_remote_input.h
+index cf5d5bd..ce9a583 100644
+--- a/wiicompiled/runtime/include/wii_remote_input.h
++++ b/wiicompiled/runtime/include/wii_remote_input.h
+@@ -97,6 +97,9 @@ void HideRemotesFromPad(PADStatus* statuses, uint32_t count);
+ 
+ // Buttons NSMBW_INPUT_SCRIPT holds for GameCube pad 1 now; false without a script.
+ bool ScriptedPadButtons(uint16_t& buttons);
++// Like ScriptedPadButtons, plus optional main-stick override (STICK_LEFT/RIGHT/UP/DOWN).
++// stickSet is true when an active event drives the stick this frame.
++bool ScriptedPad(uint16_t& buttons, int8_t& stickX, int8_t& stickY, bool& stickSet);
+ 
+ // Dolphin-style continuous scanning. SDL's HIDAPI Wii driver drops a remote on
+ // a failed Bluetooth read or an extension change and never re-adds it on its
+diff --git a/wiicompiled/runtime/src/hle/input/pad.cpp b/wiicompiled/runtime/src/hle/input/pad.cpp
+index c8ac957..fd1b21e 100644
+--- a/wiicompiled/runtime/src/hle/input/pad.cpp
++++ b/wiicompiled/runtime/src/hle/input/pad.cpp
+@@ -14,6 +14,9 @@
+ #include <cstdint>
+ #include <cstdlib>
+ #include <cstring>
++#if defined(_WIN32)
++#include <share.h>
++#endif
+ 
+ #include <SDL3/SDL_gamepad.h>
+ #include <dolphin/pad.h>
+@@ -138,10 +141,69 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
+     }
+     FillTriggersHeldByButtons(statuses);
+     InputBindings::Apply(statuses);
+-    if (uint16_t scripted = 0; WiiRemoteInput::ScriptedPadButtons(scripted)) {
+-        statuses[0].err = PAD_ERR_NONE;
+-        statuses[0].button |= scripted;
+-        if (scripted) { static int n = 0; if (n++ < 5) RT_LOGF(RT_TAG_OS, "[pad] PADRead scripted buttons 0x%04X\n", scripted); }
++    {
++        uint16_t scripted = 0;
++        int8_t sx = 0;
++        int8_t sy = 0;
++        bool stickSet = false;
++        if (WiiRemoteInput::ScriptedPad(scripted, sx, sy, stickSet)) {
++            statuses[0].err = PAD_ERR_NONE;
++            statuses[0].button |= scripted;
++            if (stickSet) {
++                statuses[0].stickX = sx;
++                statuses[0].stickY = sy;
++            }
++            if (scripted || stickSet) {
++                static int n = 0;
++                if (n++ < 8)
++                    RT_LOGF(RT_TAG_OS, "[pad] PADRead scripted buttons 0x%04X stick=%d,%d\n", scripted, (int)sx,
++                            (int)sy);
++            }
++        }
++        // Live nudge (game cwd Play\): one line "x,y" (-127..127) or LEFT/RIGHT/UP/DOWN.
++        // SDL does not reliably see synthetic keyboard SendInput; this file does.
++        {
++            const char* path = "curtain-stick.txt";
++#if defined(_WIN32)
++            FILE* sf = _fsopen(path, "r", _SH_DENYNO);
++#else
++            FILE* sf = std::fopen(path, "rb");
++#endif
++            if (sf) {
++                char buf[64] = {};
++                if (std::fgets(buf, sizeof(buf), sf)) {
++                    for (char* p = buf; *p; ++p) {
++                        if (*p == '\r' || *p == '\n') {
++                            *p = 0;
++                            break;
++                        }
++                    }
++                    int x = 0, y = 0;
++                    bool hit = false;
++                    if (std::strcmp(buf, "LEFT") == 0) {
++                        x = -127;
++                        hit = true;
++                    } else if (std::strcmp(buf, "RIGHT") == 0) {
++                        x = 127;
++                        hit = true;
++                    } else if (std::strcmp(buf, "UP") == 0) {
++                        y = 127;
++                        hit = true;
++                    } else if (std::strcmp(buf, "DOWN") == 0) {
++                        y = -127;
++                        hit = true;
++                    } else if (std::sscanf(buf, "%d,%d", &x, &y) == 2) {
++                        hit = true;
++                    }
++                    if (hit) {
++                        statuses[0].err = PAD_ERR_NONE;
++                        statuses[0].stickX = static_cast<int8_t>(std::clamp(x, -127, 127));
++                        statuses[0].stickY = static_cast<int8_t>(std::clamp(y, -127, 127));
++                    }
++                }
++                std::fclose(sf);
++            }
++        }
+     }
+ 
+     try {
+diff --git a/wiicompiled/runtime/src/settings_overlay.cpp b/wiicompiled/runtime/src/settings_overlay.cpp
+index 67c4729..f9dab35 100644
+--- a/wiicompiled/runtime/src/settings_overlay.cpp
++++ b/wiicompiled/runtime/src/settings_overlay.cpp
+@@ -37,12 +37,23 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
+ #include <cmath>
+ #include <cstdint>
+ #include <cstdio>
++#if defined(_WIN32)
++#include <share.h>
++#endif
++#include <filesystem>
+ #include <limits>
+ #include <iostream>
+ #include <string>
+ #include <string_view>
+ #include <utility>
+ 
++extern "C" {
++int No100f_CurtainTraceActive(void);
++unsigned No100f_CurtainTraceLogged(void);
++void No100f_CurtainTraceBegin(void);
++void No100f_CurtainTraceEnd(void);
++}
++
+ #if defined(_WIN32)
+ #define WIN32_LEAN_AND_MEAN
+ #include <Windows.h>
+@@ -165,6 +176,156 @@ struct ResolutionItem {
+ 
+ using Clock = std::chrono::steady_clock;
+ 
++// Curtain capture: F8 / Xbox LB begin (shot+trace) / end (shot+stop).
++bool g_curtainTraceWindowArmed = false;
++std::string g_curtainToast;
++Clock::time_point g_curtainToastUntil{};
++
++void SetCurtainToast(std::string msg, float seconds = 3.5f) {
++    g_curtainToast = std::move(msg);
++    g_curtainToastUntil =
++        Clock::now() + std::chrono::duration_cast<Clock::duration>(std::chrono::duration<float>(seconds));
++}
++
++#if defined(_WIN32)
++void RequestCurtainShot(const char* label) {
++    wchar_t modulePath[MAX_PATH]{};
++    if (GetModuleFileNameW(nullptr, modulePath, MAX_PATH) == 0) {
++        RT_LOGF(RT_TAG_GX, "curtain shot: GetModuleFileName failed\n");
++        return;
++    }
++    std::filesystem::path exePath(modulePath);
++    const std::filesystem::path playDir = exePath.parent_path();
++    const std::filesystem::path root = playDir.parent_path();
++    const std::filesystem::path script = root / "tools" / "shot-pid.ps1";
++    const std::filesystem::path outDir = root / "autotest" / "manual";
++    std::error_code ec;
++    std::filesystem::create_directories(outDir, ec);
++
++    SYSTEMTIME st{};
++    GetLocalTime(&st);
++    char stamp[32]{};
++    std::snprintf(stamp, sizeof(stamp), "%04d%02d%02d-%02d%02d%02d", st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute,
++                  st.wSecond);
++    const std::filesystem::path outPng = outDir / (std::string("shot-") + stamp + "-" + label + ".png");
++
++    const std::wstring cmd = L"powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"" + script.wstring() +
++                             L"\" -ProcessId " + std::to_wstring(GetCurrentProcessId()) + L" -Out \"" +
++                             outPng.wstring() + L"\"";
++    STARTUPINFOW si{};
++    si.cb = sizeof(si);
++    PROCESS_INFORMATION pi{};
++    std::wstring mutableCmd = cmd;
++    if (!CreateProcessW(nullptr, mutableCmd.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, nullptr, &si,
++                        &pi)) {
++        RT_LOGF(RT_TAG_GX, "curtain shot: CreateProcess failed (%lu)\n", GetLastError());
++        return;
++    }
++    CloseHandle(pi.hThread);
++    CloseHandle(pi.hProcess);
++    RT_LOGF(RT_TAG_GX, "curtain shot requested: %s\n", outPng.string().c_str());
++}
++#else
++void RequestCurtainShot(const char* label) {
++    (void)label;
++    RT_LOGF(RT_TAG_GX, "curtain shot: only implemented on Windows\n");
++}
++#endif
++
++// Live A/B label: write one line to Play/curtain-test-toast.txt (game cwd). Empty/missing clears it.
++std::string PollCurtainTestToastFile() {
++    static std::string cached;
++    static Clock::time_point lastRead{};
++    const auto now = Clock::now();
++    if (now - lastRead < std::chrono::milliseconds(100)) {
++        return cached;
++    }
++    lastRead = now;
++#if defined(_WIN32)
++    FILE* sf = _fsopen("curtain-test-toast.txt", "r", _SH_DENYNO);
++#else
++    FILE* sf = std::fopen("curtain-test-toast.txt", "rb");
++#endif
++    if (!sf) {
++        cached.clear();
++        return cached;
++    }
++    char buf[256]{};
++    if (!std::fgets(buf, sizeof(buf), sf)) {
++        std::fclose(sf);
++        cached.clear();
++        return cached;
++    }
++    std::fclose(sf);
++    for (char* p = buf; *p; ++p) {
++        if (*p == '\r' || *p == '\n') {
++            *p = 0;
++            break;
++        }
++    }
++    cached = buf;
++    return cached;
++}
++
++void DrawCurtainTraceOverlay() {
++    const std::string testToast = PollCurtainTestToastFile();
++    const bool toastAlive = !g_curtainToast.empty() && Clock::now() < g_curtainToastUntil;
++    if (!g_curtainTraceWindowArmed && !toastAlive && testToast.empty()) {
++        return;
++    }
++    const ImGuiIO& io = ImGui::GetIO();
++    constexpr float kMargin = 12.0f;
++    ImGui::SetNextWindowPos(ImVec2(io.DisplaySize.x * 0.5f, kMargin), ImGuiCond_Always, ImVec2(0.5f, 0.0f));
++    ImGui::SetNextWindowBgAlpha(0.82f);
++    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoDecoration |
++                                        ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoInputs |
++                                        ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings;
++    if (ImGui::Begin("Curtain Trace Status", nullptr, kFlags)) {
++        if (!testToast.empty()) {
++            ImGui::TextColored(ImVec4(1.0f, 0.92f, 0.2f, 1.0f), "%s", testToast.c_str());
++            ImGui::TextColored(ImVec4(0.75f, 0.85f, 1.0f, 1.0f), "[Y] = yes     [N] = no");
++        }
++        if (g_curtainTraceWindowArmed) {
++            ImGui::TextColored(ImVec4(0.35f, 1.0f, 0.45f, 1.0f), "Curtain TRACE ON  (%u lines)  —  F8/LB to stop",
++                               No100f_CurtainTraceLogged());
++        }
++        if (toastAlive) {
++            ImGui::TextUnformatted(g_curtainToast.c_str());
++        }
++    }
++    ImGui::End();
++}
++
++// Live bisect answers: while a curtain-test-toast is showing, Y/N writes Play/curtain-answer.txt.
++void PollCurtainTestAnswerKeys() {
++    const std::string toast = PollCurtainTestToastFile();
++    if (toast.empty()) return;
++    // Edge detect across frames (IsToggleKey is event-based; this path is polled).
++    static bool prevY = false;
++    static bool prevN = false;
++    int count = 0;
++    const bool* keys = SDL_GetKeyboardState(&count);
++    if (!keys) return;
++    const bool yDown = count > SDL_SCANCODE_Y && keys[SDL_SCANCODE_Y];
++    const bool nDown = count > SDL_SCANCODE_N && keys[SDL_SCANCODE_N];
++    const char* ans = nullptr;
++    if (yDown && !prevY) ans = "y";
++    if (nDown && !prevN) ans = "n";
++    prevY = yDown;
++    prevN = nDown;
++    if (!ans) return;
++#if defined(_WIN32)
++    FILE* out = _fsopen("curtain-answer.txt", "w", _SH_DENYNO);
++#else
++    FILE* out = std::fopen("curtain-answer.txt", "w");
++#endif
++    if (!out) return;
++    std::fputs(ans, out);
++    std::fclose(out);
++    RT_LOGF(RT_TAG_GX, "curtain answer: %s (toast=%s)\n", ans, toast.c_str());
++    SetCurtainToast(ans[0] == 'y' ? "Recorded YES" : "Recorded NO");
++}
++
+ constexpr auto kCursorAutoHideDelay = std::chrono::seconds(5);
+ Clock::time_point g_lastMouseActivity{Clock::now()};
+ bool g_cursorHidden = false;
+@@ -1845,6 +2006,28 @@ void HandleEvents(const AuroraEvent* events) noexcept {
+             SetTopBarVisible(!g_topBarVisible);
+             ApplyInputBlockState();
+         }
++        // Curtains: F8 or Xbox LB toggles capture window — begin (shot+trace) / end (shot+stop).
++        const bool curtainToggle =
++            !g_rebind.active &&
++            (IsToggleKey(ev->sdl, SDL_SCANCODE_F8) ||
++             (ev->sdl.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
++              ev->sdl.gbutton.button == SDL_GAMEPAD_BUTTON_LEFT_SHOULDER));
++        if (curtainToggle) {
++            if (!g_curtainTraceWindowArmed) {
++                No100f_CurtainTraceBegin();
++                g_curtainTraceWindowArmed = true;
++                RequestCurtainShot("curtains-lb-start");
++                SetCurtainToast("Curtain tracer ON — logs on mesh change (~20f heartbeat); flutter, then F8/LB");
++                RT_LOGF(RT_TAG_GX, "curtain: BEGIN (tracer on, start shot requested)\n");
++            } else {
++                RequestCurtainShot("curtains-lb-stop");
++                const unsigned logged = No100f_CurtainTraceLogged();
++                No100f_CurtainTraceEnd();
++                g_curtainTraceWindowArmed = false;
++                SetCurtainToast("Curtain tracer OFF (" + std::to_string(logged) + " lines)");
++                RT_LOGF(RT_TAG_GX, "curtain: END (stop shot requested, tracer off, logged=%u)\n", logged);
++            }
++        }
+         if (!g_rebind.active && g_muteHotkey != PAD_KEY_INVALID &&
+             IsToggleKey(ev->sdl, static_cast<SDL_Scancode>(g_muteHotkey))) {
+             g_audioMuted = !g_audioMuted;
+@@ -1962,6 +2145,8 @@ void Draw() noexcept {
+     }
+     NetplayUi::Draw();
+     DrawFpsOverlay();
++    PollCurtainTestAnswerKeys();
++    DrawCurtainTraceOverlay();
+     DrawTopBar();
+     DrawExitPrompt();
+     controller_mapping_wizard::Draw();
+diff --git a/wiicompiled/runtime/src/wii_remote_input.cpp b/wiicompiled/runtime/src/wii_remote_input.cpp
+index a675eb1..37cc9ef 100644
+--- a/wiicompiled/runtime/src/wii_remote_input.cpp
++++ b/wiicompiled/runtime/src/wii_remote_input.cpp
+@@ -76,11 +76,15 @@ constexpr uint32_t kWpadLeft = 0x0001, kWpadRight = 0x0002, kWpadDown = 0x0004,
+ // variable is set, channel 1 (and channels up to NSMBW_SCRIPT_REMOTES, default 1) report a connected
+ // Wii Remote at rest. Buttons: A B ONE TWO PLUS MINUS HOME UP DOWN LEFT RIGHT (also 1 and 2); the
+ // D-pad names are the remote's own, so held sideways RIGHT is screen up and DOWN is screen right.
++// GameCube pad 1 also accepts STICK_LEFT/RIGHT/UP/DOWN (main stick full deflection).
+ struct ScriptEvent {
+     uint64_t startMs = 0;
+     uint64_t endMs = 0;
+     uint32_t bits = 0;
+     uint32_t chan = 0;
++    int8_t stickX = 0;
++    int8_t stickY = 0;
++    bool stickSet = false;
+     std::string text;
+ };
+ 
+@@ -150,11 +154,27 @@ const InputScript& Script() {
+                 size_t b = 0;
+                 while (b <= buttons.size()) {
+                     const size_t plus = buttons.find('+', b);
+-                    event.bits |= ScriptButtonBit(buttons.substr(b, plus == std::string::npos ? std::string::npos : plus - b));
++                    const std::string name =
++                        buttons.substr(b, plus == std::string::npos ? std::string::npos : plus - b);
++                    if (name == "STICK_LEFT") {
++                        event.stickX = -127;
++                        event.stickSet = true;
++                    } else if (name == "STICK_RIGHT") {
++                        event.stickX = 127;
++                        event.stickSet = true;
++                    } else if (name == "STICK_UP") {
++                        event.stickY = 127;
++                        event.stickSet = true;
++                    } else if (name == "STICK_DOWN") {
++                        event.stickY = -127;
++                        event.stickSet = true;
++                    } else {
++                        event.bits |= ScriptButtonBit(name);
++                    }
+                     if (plus == std::string::npos) break;
+                     b = plus + 1;
+                 }
+-                if (event.bits != 0) {
++                if (event.bits != 0 || event.stickSet) {
+                     parsed.events.push_back(event);
+                 }
+             }
+@@ -933,17 +953,45 @@ const char* AccelCalibrationMessage() {
+ }
+ 
+ // GameCube games: NSMBW_INPUT_SCRIPT channel 1 drives pad 1 instead (A B, PLUS = START, ONE = X, TWO = Y,
+-// MINUS = Z, D-pad as named). Returns false while no script is set.
+-bool ScriptedPadButtons(uint16_t& buttons) {
+-    KpadSample sample;
+-    if (!ScriptedSample(0, sample)) return false;
++// MINUS = Z, D-pad as named, STICK_* for the main stick). Returns false while no script is set.
++static bool ScriptedPadInner(uint16_t& buttons, int8_t& stickX, int8_t& stickY, bool& stickSet) {
++    const InputScript& script = Script();
++    if (!script.active || script.remotes < 1) return false;
++    const auto clockMs = [] {
++        return DetClock::Enabled() ? DetClock::Now() / (TimeBaseContract::kTicksPerSecond / 1000) : SDL_GetTicks();
++    };
++    static const uint64_t originMs = clockMs();
++    const uint64_t now = clockMs() - originMs;
++    buttons = 0;
++    stickX = 0;
++    stickY = 0;
++    stickSet = false;
+     const std::pair<uint32_t, uint16_t> map[] = {
+         {kWpadA, PAD_BUTTON_A}, {kWpadB, PAD_BUTTON_B}, {kWpadPlus, PAD_BUTTON_START}, {kWpadOne, PAD_BUTTON_X},
+         {kWpadTwo, PAD_BUTTON_Y}, {kWpadMinus, PAD_TRIGGER_Z}, {kWpadUp, PAD_BUTTON_UP}, {kWpadDown, PAD_BUTTON_DOWN},
+         {kWpadLeft, PAD_BUTTON_LEFT}, {kWpadRight, PAD_BUTTON_RIGHT}};
+-    buttons = 0;
+-    for (const auto& [wpad, pad] : map) if (sample.hold & wpad) buttons |= pad;
++    for (const ScriptEvent& event : script.events) {
++        if (event.chan != 0 || now < event.startMs || now >= event.endMs) continue;
++        for (const auto& [wpad, pad] : map) {
++            if (event.bits & wpad) buttons |= pad;
++        }
++        if (event.stickSet) {
++            stickX = event.stickX;
++            stickY = event.stickY;
++            stickSet = true;
++        }
++    }
+     return true;
+ }
+ 
++bool ScriptedPadButtons(uint16_t& buttons) {
++    int8_t sx = 0, sy = 0;
++    bool stickSet = false;
++    return ScriptedPadInner(buttons, sx, sy, stickSet);
++}
++
++bool ScriptedPad(uint16_t& buttons, int8_t& stickX, int8_t& stickY, bool& stickSet) {
++    return ScriptedPadInner(buttons, stickX, stickY, stickSet);
++}
++
+ } // namespace WiiRemoteInput

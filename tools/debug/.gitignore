@@ -1,0 +1,4 @@
+# Machine-local state: the user's game config backup, Dolphin disc copies, anything with game data
+local/
+__pycache__/
+*.pyc
