@@ -22,6 +22,8 @@ ports of the other console versions may follow.
 - Restored Creeper window animation in Mystic Manor's Mystery Machine courtyard
 - Built-in HD texture pack (can be switched off)
 - Gamepads and keyboard, remappable; button prompts match your Xbox, PlayStation or Nintendo controller
+- Optional original Xbox controls: X head smash, B dig / talk and back in menus, LB soap bubble, RB sneak; the button
+  prompts and tutorial hints follow (launcher **Controls** page or **F10** > Controller)
 - GameCube memory-card saves
 - Option to skip the intro movies; mods that replace game files or textures
 - The game's holiday events follow the real date, or pick a holiday or turn them off on the launcher's **Play** page
@@ -62,6 +64,7 @@ The game builds to `Play\`; the package goes to `dist\`. Packaging expects the H
 ## Credits
 
 - FrightWorks: Loneranger419
+- Creeper window animation and the first version of the original Xbox controls: BitsofBitsofBitsofBits
 - Original port, [Scooby-Doo: Refrightened](https://github.com/josiahg2502-glitch/Scooby-Doo-Refrightened): JosiahG
 - [WiiCompiled](https://github.com/patchzyy/Wiicompiled) by patchzyy and contributors (GPLv3); Aurora by Luke Street
   (MIT); other components in [`wiicompiled/THIRD-PARTY-NOTICES.md`](wiicompiled/THIRD-PARTY-NOTICES.md)

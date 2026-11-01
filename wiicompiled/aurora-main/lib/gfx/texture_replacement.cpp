@@ -71,8 +71,9 @@ struct ReplacementIndexEntry {
 
 absl::flat_hash_map<RuntimeTextureKey, ReplacementIndexEntry> s_replacementIndex;
 // <UserData>/button_icons/<style>: button prompts for the controller in use, looked up before everything else.
-constexpr const char* kButtonIconStyles[] = {"xbox", "playstation", "nintendo"};
-std::array<absl::flat_hash_map<RuntimeTextureKey, ReplacementIndexEntry>, 3> s_buttonIconIndex;
+constexpr const char* kButtonIconStyles[] = {"xbox", "playstation", "nintendo",
+                                             "xbox_original", "playstation_original", "nintendo_original"};
+std::array<absl::flat_hash_map<RuntimeTextureKey, ReplacementIndexEntry>, std::size(kButtonIconStyles)> s_buttonIconIndex;
 std::atomic<int> s_buttonIconStyle{-1};
 std::atomic<bool> s_buttonIconStyleChanged{false};
 int s_appliedButtonIconStyle = -1;
@@ -510,12 +511,32 @@ void evict_replacement_cache_if_needed() noexcept {
   }
 }
 
+// Button prompts follow the controller whether or not texture replacements (the HD pack) are on.
+static void index_button_icons(const std::filesystem::path& userPath) noexcept {
+  std::error_code ec;
+  for (size_t style = 0; style < s_buttonIconIndex.size(); ++style) {
+    for (const auto& entry : std::filesystem::directory_iterator(userPath / "button_icons" / kButtonIconStyles[style], ec)) {
+      if (const auto parsed = parse_replacement_filename(fs_path_to_string(entry.path().filename())); parsed.has_value())
+        s_buttonIconIndex[style].try_emplace(*parsed, ReplacementIndexEntry{entry.path()});
+    }
+    ec.clear();
+    Log.info("Button icons '{}': {} textures", kButtonIconStyles[style], s_buttonIconIndex[style].size());
+  }
+  // BUTTON_ICONS=xbox|playstation|nintendo pins a family (tests: scripted input never reaches the gamepad code).
+  if (const char* forced = std::getenv("BUTTON_ICONS")) {
+    for (size_t style = 0; style < s_buttonIconIndex.size(); ++style)
+      if (std::string_view(forced) == kButtonIconStyles[style]) s_buttonIconForced = static_cast<int>(style);
+    set_button_icon_style(s_buttonIconForced);
+  }
+}
+
 void build_index() noexcept {
+  auto userPath = fs_path_from_string(g_config.userPath);
+  index_button_icons(userPath);
   if (!g_config.allowTextureReplacements) {
     return;
   }
 
-  auto userPath = fs_path_from_string(g_config.userPath);
   auto cachePath = fs_path_from_string(g_config.cachePath);
 
   s_replacementRoot = userPath / "texture_replacements";
@@ -581,21 +602,6 @@ void build_index() noexcept {
   }
 
   Log.info("Indexed {} texture replacements from {} folder(s) (texture_replacements + mods)", s_replacementIndex.size(), roots.size());
-
-  for (size_t style = 0; style < s_buttonIconIndex.size(); ++style) {
-    for (const auto& entry : std::filesystem::directory_iterator(userPath / "button_icons" / kButtonIconStyles[style], ec)) {
-      if (const auto parsed = parse_replacement_filename(fs_path_to_string(entry.path().filename())); parsed.has_value())
-        s_buttonIconIndex[style].try_emplace(*parsed, ReplacementIndexEntry{entry.path()});
-    }
-    ec.clear();
-    Log.info("Button icons '{}': {} textures", kButtonIconStyles[style], s_buttonIconIndex[style].size());
-  }
-  // BUTTON_ICONS=xbox|playstation|nintendo pins a set (tests: scripted input never reaches the gamepad code).
-  if (const char* forced = std::getenv("BUTTON_ICONS")) {
-    for (size_t style = 0; style < s_buttonIconIndex.size(); ++style)
-      if (std::string_view(forced) == kButtonIconStyles[style]) s_buttonIconForced = static_cast<int>(style);
-    set_button_icon_style(s_buttonIconForced);
-  }
 }
 
 const ReplacementIndexEntry* find_replacement_path(const RuntimeTextureKey& key) noexcept {
@@ -603,6 +609,7 @@ const ReplacementIndexEntry* find_replacement_path(const RuntimeTextureKey& key)
     const auto& icons = s_buttonIconIndex[s_appliedButtonIconStyle];
     if (const auto it = icons.find(key); it != icons.end()) return &it->second;
   }
+  if (!g_config.allowTextureReplacements) return nullptr;
   if (const auto it = s_replacementIndex.find(key); it != s_replacementIndex.end()) {
     return &it->second;
   }
@@ -808,14 +815,14 @@ void load_tlut(const GXTlutObj* obj, uint32_t idx) noexcept {
 std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
   ZoneScoped;
 
-  if (!g_config.allowTextureReplacements) {
+  if (!g_config.allowTextureReplacements && s_appliedButtonIconStyle < 0) {
     return std::nullopt;
   }
 
   const RuntimeTextureKey key = build_runtime_key(obj);
   const auto* path = find_replacement_path(key);
   if (path == nullptr) {
-    report_missing_key(key, obj);
+    if (g_config.allowTextureReplacements) report_missing_key(key, obj);
     return std::nullopt;
   }
 
@@ -837,7 +844,7 @@ std::optional<TextureHandle> find_replacement(const GXTexObj_& obj) noexcept {
 }
 
 void set_button_icon_style(int style) noexcept {
-  if (s_buttonIconForced >= 0) style = s_buttonIconForced;
+  if (s_buttonIconForced >= 0) style = s_buttonIconForced % 3 + (style >= 3 ? 3 : 0);
   if (style < -1 || style >= static_cast<int>(s_buttonIconIndex.size())) style = -1;
   if (s_buttonIconStyle.exchange(style) != style) s_buttonIconStyleChanged.store(true);
 }

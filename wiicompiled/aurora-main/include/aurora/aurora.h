@@ -202,7 +202,8 @@ typedef enum {
 void aurora_set_metalfx_spatial(bool enabled);
 bool aurora_get_metalfx_spatial();
 bool aurora_is_metalfx_spatial_supported();
-// Button prompt textures for the controller in use: 0 xbox, 1 playstation, 2 nintendo, -1 the game's own.
+// Button prompt textures for the controller in use: 0 xbox, 1 playstation, 2 nintendo, -1 the game's own;
+// +3 for the same set with B and X swapped (original Xbox controls in gameplay).
 void aurora_set_button_icon_style(int style);
 AuroraMetalFXStatus aurora_get_metalfx_status();
 

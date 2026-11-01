@@ -544,6 +544,7 @@ sealed class MainForm : Form
         var (card, body) = NewCard("Controls");
         body.Controls.Add(Note("Gamepads (Xbox, PlayStation, Switch Pro, GameCube adapter...) work right away as a GameCube controller. " +
                                "To change any button, press F10 in the game and open Controller settings."));
+        body.Controls.Add(BuildLayoutRow());
         body.Controls.Add(new Label { Text = "Keyboard", Font = new Font("Segoe UI", 13f, FontStyle.Bold), ForeColor = Ink, AutoSize = true, Margin = S(0, 10, 0, 0) });
         var table = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, BackColor = Paper, Margin = S(0, 8, 0, 8), CellBorderStyle = TableLayoutPanelCellBorderStyle.Single };
         foreach (var (what, key) in new[] { ("Move", "W A S D"), ("Camera (C-stick)", "Arrow keys"), ("A (jump)", "Space"), ("B", "Left Shift"),
@@ -554,6 +555,31 @@ sealed class MainForm : Form
         }
         body.Controls.Add(table);
         return card;
+    }
+
+    // [controller] layout: "gamecube" or "xbox_original" (the game's original Xbox controls, hle/no100f_xbox_layout.h).
+    Control BuildLayoutRow()
+    {
+        var row = new FlowLayoutPanel { AutoSize = true, Margin = S(0, 6, 0, 6), BackColor = Paper };
+        row.Controls.Add(new Label { Text = "Gamepad layout", AutoSize = true, ForeColor = Ink, Font = new Font("Segoe UI", 10.5f, FontStyle.Bold), Margin = S(0, 8, 16, 0) });
+        var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(360), Cursor = glassHand };
+        box.Items.Add("GameCube");
+        box.Items.Add("Original Xbox");
+        box.SelectedIndex = new GameConfig(configPath).Get("controller", "layout") == "xbox_original" ? 1 : 0;
+        box.SelectedIndexChanged += (_, _) =>
+        {
+            var c = new GameConfig(configPath);
+            c.SetString("controller", "layout", box.SelectedIndex == 1 ? "xbox_original" : "gamecube");
+            c.Save();
+        };
+        row.Controls.Add(box);
+        var wrap = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, Margin = Padding.Empty, BackColor = Paper };
+        wrap.Controls.Add(row);
+        wrap.Controls.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display, " +
+                               "LT gum, RT run, LB soap bubble (Xbox White), RB sneak (Xbox Black), Start pause; the hints in the game say so too. " +
+                               "GameCube: B head smash and back in menus, X dig / enter / talk, Z + L soap bubble, Z + R sneak (Z = RB). " +
+                               "Also in F10 > Controller."));
+        return wrap;
     }
 
     // ----- Mods -----
