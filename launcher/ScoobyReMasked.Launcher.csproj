@@ -8,7 +8,7 @@
     <AssemblyName>Scooby-Doo Refrightened Launcher</AssemblyName>
     <RootNamespace>ScoobyReMasked</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Product>FrightWorks: Night of 100 Frights</Product>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
