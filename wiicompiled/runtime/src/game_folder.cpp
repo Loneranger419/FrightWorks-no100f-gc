@@ -24,10 +24,10 @@ bool IsExtractedDisc(const fs::path& path) {
 }
 
 #if defined(_WIN32)
-constexpr const wchar_t* kTitle = L"Scooby-Doo: Refrightened";
+constexpr const wchar_t* kTitle = L"FrightWorks: Night of 100 Frights";
 
 constexpr const wchar_t* kSteps =
-    L"Scooby-Doo: Refrightened runs your own copy of Scooby-Doo! Night of 100 Frights (USA, GIHE78, GameCube). "
+    L"FrightWorks: Night of 100 Frights runs your own copy of Scooby-Doo! Night of 100 Frights (USA, GIHE78, GameCube). "
     L"Extract it once with Dolphin:\n\n"
     L"1. Open Dolphin on this computer and find Scooby-Doo! Night of 100 Frights in the game list.\n"
     L"2. Right-click it, choose Properties, then the Filesystem tab.\n"

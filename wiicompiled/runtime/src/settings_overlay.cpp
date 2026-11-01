@@ -1369,9 +1369,10 @@ void DrawStartupScreen() {
     if (ImGui::Begin("Wiicompiled Startup", nullptr, kFlags)) {
         // The credits, in the game's own fonts when the game folder is readable (it always is once
         // the game can start), else in the overlay's font.
-        constexpr const char* kTitle = "Made by JosiahG";
+        constexpr const char* kTitle = "FrightWorks: Night of 100 Frights";
         constexpr const char* kCredit =
-            "Scooby-Doo: Refrightened - a Scooby-Doo! Night of 100 Frights PC recomp. Built on WiiCompiled's code.";
+            "by Loneranger419, based on Scooby-Doo: Refrightened by JosiahG. A Scooby-Doo! Night of 100 Frights PC recomp, "
+            "built on WiiCompiled's code.";
         // At the bottom of the screen.
         constexpr const char* kReport = "";
         // Scooby-Doo! Unmasked's own font, read from the game folder (font/papermarioset_US.bfn).
@@ -1487,8 +1488,8 @@ void DrawStartupScreen() {
                 }
                 GameLayout::DrawText(list, view, *pmFont, u, 0.0f, y + bob, fs, top, bottom, 1.0f, 1, 1);
             };
-            Outlined("SCOOBY-DOO: RE-MASKED", cardY + 88.0f, 40.0f, 0xFFF26BFFu, 0xFF9A1EFFu, 3.0f);
-            Outlined("Made by JosiahG", cardY + 32.0f, 48.0f, 0xFF5A4AFFu, 0xC81E1EFFu, 3.0f);
+            Outlined("FRIGHTWORKS", cardY + 88.0f, 40.0f, 0xFFF26BFFu, 0xFF9A1EFFu, 3.0f);
+            Outlined("Night of 100 Frights", cardY + 32.0f, 48.0f, 0xFF5A4AFFu, 0xC81E1EFFu, 3.0f);
             {
                 const auto u = GameLayout::Utf16(kCredit);
                 GameLayout::DrawText(list, view, *pmFont, u, 0.0f, cardY - 22.0f + bob, Fit(u, 17.0f), 0x3A2A18FFu,
@@ -1633,7 +1634,7 @@ void DrawTopBar() {
     ImGui::End();
     if (!ImGui::BeginMainMenuBar()) return;
 
-    ImGui::TextUnformatted("Scooby-Doo: Refrightened");
+    ImGui::TextUnformatted("FrightWorks: Night of 100 Frights");
     ImGui::Separator();
     const auto resolutionIt = std::find_if(kResolutions.begin(), kResolutions.end(), [](const ResolutionItem& item) {
         return std::fabs(item.scale - g_resolutionScale) < 0.001f;

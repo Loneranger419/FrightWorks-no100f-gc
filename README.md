@@ -1,8 +1,11 @@
-# Scooby-Doo: Refrightened
+# FrightWorks: Night of 100 Frights
 
 A statically recompiled PC port of **Scooby-Doo! Night of 100 Frights** (GameCube, 2002). The game's PowerPC code is
 translated ahead of time to C++ with [WiiCompiled](https://github.com/patchzyy/Wiicompiled) and compiled into a Windows
 program, so there is no CPU emulator; the console's graphics, audio and system calls are reimplemented underneath.
+
+FrightWorks continues [Scooby-Doo: Refrightened](https://github.com/josiahg2502-glitch/Scooby-Doo-Refrightened) by JosiahG. This repository is the GameCube version;
+ports of the other console versions may follow.
 
 ![Mystic Manor in widescreen at 4K](docs/screenshots/courtyard.jpg)
 
@@ -29,7 +32,7 @@ program, so there is no CPU emulator; the console's graphics, audio and system c
 Requires Windows 10/11 (64-bit) and **Night of 100 Frights, GameCube USA v1.01 (GIHE78, revision 1)** as `.iso`,
 `.gcm` or `.ciso`.
 
-1. Unzip the [latest release](https://github.com/josiahg2502-glitch/Scooby-Doo-Refrightened/releases/latest).
+1. Unzip the [latest release](https://github.com/Loneranger419/FrightWorks-no100f-gc/releases/latest).
 2. Open `Scooby-Doo Refrightened.exe`, choose your disc image on the **Play** page, then press **PLAY**.
 
 Settings are on the launcher's **Display** page and in game (**F10**). **F11** toggles fullscreen. Saves, settings
@@ -53,7 +56,8 @@ The game builds to `Play\`; the package goes to `dist\`. Packaging expects the H
 
 ## Credits
 
-- Port: JosiahG
+- FrightWorks: Loneranger419
+- Original port, [Scooby-Doo: Refrightened](https://github.com/josiahg2502-glitch/Scooby-Doo-Refrightened): JosiahG
 - [WiiCompiled](https://github.com/patchzyy/Wiicompiled) by patchzyy and contributors (GPLv3); Aurora by Luke Street
   (MIT); other components in [`wiicompiled/THIRD-PARTY-NOTICES.md`](wiicompiled/THIRD-PARTY-NOTICES.md)
 - HD texture pack by **dogerki**
@@ -63,7 +67,8 @@ The game builds to `Play\`; the package goes to `dist\`. Packaging expects the H
 
 ## License
 
-GPLv3 ([`LICENSE`](LICENSE)); bundled components keep their own licenses.
+GPLv3 ([`LICENSE`](LICENSE)); bundled components keep their own licenses. FrightWorks is a modified version of
+Scooby-Doo: Refrightened by JosiahG, changed by Loneranger419 from 2026-10-31 on (the git history lists every change).
 
 Scooby-Doo ™ & © Hanna-Barbera / Warner Bros. Night of 100 Frights © THQ / Warner Bros. Interactive, developed by
 Heavy Iron Studios. Unofficial fan project, not affiliated with or endorsed by them. The repository contains no game
