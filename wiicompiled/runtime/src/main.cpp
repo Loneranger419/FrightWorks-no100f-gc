@@ -1448,8 +1448,8 @@ int RuntimeMain(int argc, char** argv) {
             }
             NetplaySession::SetStallHandler(&NetplayUi::OnSessionStall);
         }
-        if (RuntimeConfigFile::DiscordPresenceEnabled()) {
-            DiscordPresence::Initialize(RuntimeConfigFile::DiscordClientId(), "Scooby-Doo: Refrightened");
+        if (RuntimeConfigFile::DiscordPresenceEnabled() && !RuntimeConfigFile::DiscordClientId().empty()) {
+            DiscordPresence::Initialize(RuntimeConfigFile::DiscordClientId(), "FrightWorks: Night of 100 Frights");
         }
         SystemBridge::Initialize();
         TranslatedFunctionRegistry::Finalize();

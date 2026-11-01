@@ -1,4 +1,5 @@
-SCOOBY-DOO: REFRIGHTENED - a PC port of Scooby-Doo! Night of 100 Frights by JosiahG
+FRIGHTWORKS: NIGHT OF 100 FRIGHTS - a PC port of Scooby-Doo! Night of 100 Frights by Loneranger419,
+based on Scooby-Doo: Refrightened by JosiahG.
 
 Needs your own GameCube disc image: USA v1.01 (GIHE78, revision 1), .iso/.gcm/.ciso. No game data is included.
 

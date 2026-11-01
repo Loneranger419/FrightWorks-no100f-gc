@@ -9,7 +9,7 @@ namespace ScoobyReMasked;
 // data\UserData\Config.toml, the keys the game's F10 menu uses. All art is drawn here; nothing from the game is shipped.
 sealed class MainForm : Form
 {
-    const string GameExe = "Scooby-Doo Refrightened.exe", AppTitle = "Scooby-Doo: Refrightened";
+    const string GameExe = "Scooby-Doo Refrightened.exe", AppTitle = "FrightWorks: Night of 100 Frights";
     static Color Hex(string s) => ColorTranslator.FromHtml(s);
     // The game's palette: the logo's purple with its orange-tan rim, Mystic Manor's green sky and amber windows.
     static readonly Color Cream = Hex("#ECEFE4"), Paper = Hex("#FBFCF8"), Ink = Hex("#1F1830"), Teal = Hex("#5E3C91"),
@@ -213,7 +213,7 @@ sealed class MainForm : Form
         float em = Math.Min(S(46), W * 0.045f), left = S(22);
         using (var path = new GraphicsPath())
         {
-            path.AddString("SCOOBY-DOO!", face, style, em, new PointF(left, S(16)), StringFormat.GenericDefault);
+            path.AddString("FRIGHTWORKS", face, style, em, new PointF(left, S(16)), StringFormat.GenericDefault);
             using (var outline = new Pen(Hex("#1A0F24"), S(9)) { LineJoin = LineJoin.Round }) g.DrawPath(outline, path);
             using (var rim = new Pen(Hex("#E8A04A"), S(4)) { LineJoin = LineJoin.Round }) g.DrawPath(rim, path);
             using var fill = new LinearGradientBrush(new RectangleF(0, S(18), 10, em), Hex("#A55FD0"), Hex("#5C2A8A"), LinearGradientMode.Vertical);
@@ -221,14 +221,14 @@ sealed class MainForm : Form
         }
         using (var path = new GraphicsPath())
         {
-            path.AddString("Refrightened", face, style, em * 0.66f, new PointF(left + em * 0.45f, S(16) + em * 1.08f), StringFormat.GenericDefault);
+            path.AddString("Night of 100 Frights", face, style, em * 0.66f, new PointF(left + em * 0.45f, S(16) + em * 1.08f), StringFormat.GenericDefault);
             using (var outline = new Pen(Hex("#1A0F24"), S(7)) { LineJoin = LineJoin.Round }) g.DrawPath(outline, path);
             using var fill = new SolidBrush(Hex("#FFF4C8"));
             g.FillPath(fill, path);
         }
         using var credit = new Font("Segoe UI", 10f, FontStyle.Bold);
         using var ink = new SolidBrush(Hex("#1A0F24"));
-        g.DrawString("Made by JosiahG", credit, ink, left + em * 0.5f, S(16) + em * 1.9f);
+        g.DrawString("by Loneranger419 · based on Refrightened by JosiahG", credit, ink, left + em * 0.5f, S(16) + em * 1.9f);
     }
 
     void PaintHeader(object? sender, PaintEventArgs e)
@@ -348,7 +348,7 @@ sealed class MainForm : Form
         progress = new ProgressBar { Width = S(520), Height = S(16), Visible = false, Margin = S(0, 4, 0, 6) };
         body.Controls.Add(progress);
         body.Controls.Add(dumpHelp = Note(
-            "Scooby-Doo: Refrightened runs your own copy of Scooby-Doo! Night of 100 Frights for the GameCube (USA, GIHE78, version 1.01). " +
+            "FrightWorks: Night of 100 Frights runs your own copy of Scooby-Doo! Night of 100 Frights for the GameCube (USA, GIHE78, version 1.01). " +
             "Dump the disc you own (for example with CleanRip on a Wii) as a plain .iso or .ciso, then choose it above. " +
             "The launcher copies the game files into the Disc folder once; the image file isn't needed afterwards."));
         body.Controls.Add(Note("In the game, F10 opens the settings menu (resolution, picture shape, controls, audio) and F11 switches between fullscreen and a window."));

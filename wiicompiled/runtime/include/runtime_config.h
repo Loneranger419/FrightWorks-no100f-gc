@@ -405,7 +405,7 @@ inline void EnsureConfigFile() {
     // Scooby-Doo! Night of 100 Frights defaults: borderless 1080p (2.25 x 480 lines; 4.5 = 4K, 0 = the screen's
     // own size), cinematic 2.39:1, no frame interpolation (the game runs at 30 fps, which the 60 fps-based
     // interpolation backs off from), HD textures on. The launcher writes the same keys.
-    output << "# Scooby-Doo: Refrightened user configuration\n"
+    output << "# FrightWorks: Night of 100 Frights user configuration\n"
               "# paths.dvd_root is your Scooby-Doo! Night of 100 Frights (USA, GIHE78) extracted to a DATA folder;\n"
               "# the launcher fills it in from a .iso/.gcm/.ciso.\n\n"
               "[video]\n"
@@ -452,8 +452,8 @@ inline void EnsureConfigFile() {
               "enabled = true\n\n"
               "[discord]\n"
               "# Rich Presence talks only to a locally-running Discord client.\n"
-              "# Retro Rewind supplies its official app ID automatically. Set this\n"
-              "# to WiiCompiled's Discord application ID for basic base-game presence.\n"
+              "# Off until client_id names a Discord application: FrightWorks has none\n"
+              "# of its own yet.\n"
               "enabled = true\n"
               "# client_id = \"123456789012345678\"\n\n"
               "[paths]\n"
@@ -1278,7 +1278,9 @@ inline bool DiscordPresenceEnabled(bool fallback = true) {
     return Get().discordPresenceEnabled.value_or(fallback);
 }
 
-inline std::string DiscordClientId(std::string fallback = "1543984562369990706") {
+// No default application: FrightWorks has no Discord app of its own yet, so base-game presence only starts when
+// [discord] client_id is set (WiiCompiled's app ID was 1543984562369990706).
+inline std::string DiscordClientId(std::string fallback = "") {
     return Get().discordClientId.value_or(std::move(fallback));
 }
 

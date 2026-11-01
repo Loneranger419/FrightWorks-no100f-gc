@@ -37,7 +37,7 @@ std::string Sha256Hex(const std::vector<uint8_t>& data) {
 
 [[noreturn]] void Fail(const std::string& message) {
     RT_LOG(RT_TAG_RUNTIME) << "[disc] " << message << std::endl;
-    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Scooby-Doo: Refrightened", message.c_str(), nullptr);
+    SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "FrightWorks: Night of 100 Frights", message.c_str(), nullptr);
     std::exit(1);
 }
 
