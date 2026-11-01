@@ -13,7 +13,7 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
 Set-Location $root
 $play = Join-Path $root 'Play'
-$exe = Join-Path $play 'Scooby-Doo Refrightened.exe'
+$exe = Join-Path $play 'FrightWorks Game.exe'
 $ms = Join-Path $root 'tools\debug\manual-session.ps1'
 $cfg = Join-Path $play 'UserData\Config.toml'
 $cmdFile = Join-Path $play 'devmenu.txt'
@@ -65,8 +65,8 @@ try {
     & powershell -ExecutionPolicy Bypass -File $ms stop | Out-Null
     # stop can miss the copy start just launched: make sure none is left before ours
     $t = [DateTime]::Now
-    while ((Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue) -and ([DateTime]::Now - $t).TotalSeconds -lt 15) {
-        Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Stop-Process -Force
+    while ((Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue) -and ([DateTime]::Now - $t).TotalSeconds -lt 15) {
+        Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Stop-Process -Force
         Start-Sleep -Milliseconds 500
     }
     # manual-session's boot mod only sets BOOT: add the hub intro skip (as hunt.ps1 does) or the shots catch the cutscene
@@ -110,7 +110,7 @@ try {
     }
     & powershell -ExecutionPolicy Bypass -File $ms stop | Out-Null
 } finally {
-    Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Stop-Process -Force
+    Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Stop-Process -Force
     Start-Sleep 1
     if (Test-Path $link) { [IO.Directory]::Delete($link, $false) }
     Remove-Item -Recurse -Force (Join-Path $play 'UserData\mods\zz-manual') -ErrorAction SilentlyContinue

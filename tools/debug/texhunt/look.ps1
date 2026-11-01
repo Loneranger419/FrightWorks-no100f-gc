@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
 Set-Location $root
 $play = Join-Path $root 'Play'
-$exe = Join-Path $play 'Scooby-Doo Refrightened.exe'
+$exe = Join-Path $play 'FrightWorks Game.exe'
 $ms = Join-Path $root 'tools\debug\manual-session.ps1'
 $cfg = Join-Path $play 'UserData\Config.toml'
 $cmdFile = Join-Path $play 'devmenu.txt'
@@ -22,7 +22,7 @@ $errLog = Join-Path $root 'autotest\texhunt\look-stderr.log'
 New-Item -ItemType Directory -Force (Split-Path $errLog) | Out-Null
 $start = [DateTime]::Now
 
-if (Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue) { throw 'the game is running; close it first' }
+if (Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue) { throw 'the game is running; close it first' }
 try {
     # boot mod + config from manual-session, then the user's config with only the HD setting changed
     $msArgs = @('-ExecutionPolicy', 'Bypass', '-File', $ms, 'start', '-Boot', $Boot)
@@ -30,8 +30,8 @@ try {
     & powershell @msArgs | Out-Null
     & powershell -ExecutionPolicy Bypass -File $ms stop | Out-Null
     $t = [DateTime]::Now
-    while ((Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue) -and ([DateTime]::Now - $t).TotalSeconds -lt 15) {
-        Get-Process 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue | Stop-Process -Force
+    while ((Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue) -and ([DateTime]::Now - $t).TotalSeconds -lt 15) {
+        Get-Process 'FrightWorks Game' -ErrorAction SilentlyContinue | Stop-Process -Force
         Start-Sleep -Milliseconds 500
     }
     if ($Boot -eq 'h001' -and -not $KeepIntro) {

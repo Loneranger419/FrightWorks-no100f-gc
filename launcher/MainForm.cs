@@ -9,7 +9,7 @@ namespace ScoobyReMasked;
 // data\UserData\Config.toml, the keys the game's F10 menu uses. All art is drawn here; nothing from the game is shipped.
 sealed class MainForm : Form
 {
-    const string GameExe = "Scooby-Doo Refrightened.exe", AppTitle = "FrightWorks: Night of 100 Frights";
+    internal const string GameExe = "FrightWorks Game.exe", AppTitle = "FrightWorks: Night of 100 Frights";
     static Color Hex(string s) => ColorTranslator.FromHtml(s);
     // The game's palette: the logo's purple with its orange-tan rim, Mystic Manor's green sky and amber windows.
     static readonly Color Cream = Hex("#ECEFE4"), Paper = Hex("#FBFCF8"), Ink = Hex("#1F1830"), Teal = Hex("#5E3C91"),
@@ -101,7 +101,7 @@ sealed class MainForm : Form
     }
 
     // The game folder: data\ beside the launcher (release), or Play\ above launcher\publish (dev tree).
-    static (string root, string game) FindGame()
+    internal static (string root, string game) FindGame()
     {
         for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
             foreach (var sub in new[] { "data", "Play" })

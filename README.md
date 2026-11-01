@@ -38,10 +38,13 @@ Requires Windows 10/11 (64-bit) and **Night of 100 Frights, GameCube USA v1.01 (
 `.gcm` or `.ciso`.
 
 1. Unzip the [latest release](https://github.com/Loneranger419/FrightWorks-no100f-gc/releases/latest).
-2. Open `Scooby-Doo Refrightened.exe`, choose your disc image on the **Play** page, then press **PLAY**.
+2. Open `FrightWorks.exe`, choose your disc image on the **Play** page, then press **PLAY**.
 
 Settings are on the launcher's **Display** page and in game (**F10**). **F11** toggles fullscreen. Saves, settings
 and mods live in `data\UserData`; unzip a new release over the old folder to update.
+
+Coming from Scooby-Doo: Refrightened? Unzip FrightWorks next to your old folder. On first start, the launcher offers
+to copy your saves, settings, controls, mods and game files over; the old folder is left as it is.
 
 **Version numbers** continue from Scooby-Doo: Refrightened. Its last release, v1.0.2, is the commit FrightWorks split
 off from, so FrightWorks starts at v1.0.3.
@@ -54,7 +57,7 @@ Windows 10/11 x64 with Python 3 and Git. The build downloads its own toolchain i
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tools\build-launcher.ps1
-& "launcher\publish\Scooby-Doo Refrightened Launcher.exe" --extract "C:\path\to\game.iso" Disc\DATA
+& "launcher\publish\FrightWorks.exe" --extract "C:\path\to\game.iso" Disc\DATA
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1
 powershell -ExecutionPolicy Bypass -File tools\package-scooby.ps1 -Zip
 ```
@@ -82,7 +85,7 @@ Scooby-Doo: Refrightened by JosiahG, changed by Loneranger419 from 2026-10-31 on
 
 Not covered by the GPL (these stay under their owners' terms):
 
-- `launcher/art/`, `launcher/refrightened.ico`, `launcher/refrightened-256.png`, `launcher/scooby.ico`: Scooby-Doo and
+- `launcher/art/`, `launcher/frightworks.ico`, `launcher/frightworks-256.png`, `launcher/scooby.ico`: Scooby-Doo and
   Shaggy artwork, © Hanna-Barbera / Warner Bros.
 - `launcher/title.ttf`: the "Scooby Doo" font by Lauren Ashpole, freeware; commercial use requires a donation
   ([FontSpace](https://www.fontspace.com/scooby-doo-font-f7039))
