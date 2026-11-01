@@ -43,6 +43,9 @@ Requires Windows 10/11 (64-bit) and **Night of 100 Frights, GameCube USA v1.01 (
 Settings are on the launcher's **Display** page and in game (**F10**). **F11** toggles fullscreen. Saves, settings
 and mods live in `data\UserData`; unzip a new release over the old folder to update.
 
+**Version numbers** continue from Scooby-Doo: Refrightened. Its last release, v1.0.2, is the commit FrightWorks split
+off from, so FrightWorks starts at v1.0.3.
+
 ![The launcher](docs/launcher.png)
 
 ## Building
