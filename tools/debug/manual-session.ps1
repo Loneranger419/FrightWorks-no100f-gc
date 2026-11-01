@@ -65,7 +65,7 @@ function Stop-AutomationLeftovers {
 
 function Get-PlayGameProcesses {
     Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-        $_.Name -match 'Scooby' -and $_.ExecutablePath -and (
+        $_.Name -match '^FrightWorks Game\.exe$|Scooby' -and $_.ExecutablePath -and (
             $_.ExecutablePath -eq $exe -or
             ((Split-Path $_.ExecutablePath -Parent) -eq $play)
         )
@@ -184,9 +184,9 @@ switch ($Command) {
             Write-Host 'start: use "shot" to capture, or "stop" then "start" to relaunch'
             exit 0
         }
-        # Refuse to start if other Scooby copies are still up outside Play (shouldn't after stop-tests).
+        # Refuse to start if other game copies are still up outside Play (shouldn't after stop-tests).
         $strays = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -match 'Scooby' -and $_.ExecutablePath -and $_.ExecutablePath -ne $exe
+            $_.Name -match '^FrightWorks Game\.exe$|Scooby' -and $_.ExecutablePath -and $_.ExecutablePath -ne $exe
         }
         if ($strays) {
             foreach ($s in $strays) {
