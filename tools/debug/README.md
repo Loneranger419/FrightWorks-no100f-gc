@@ -22,7 +22,7 @@ Layout (paths in the skills and scripts are written from the repo root):
 | Skill | Use for |
 | --- | --- |
 | `hle-divergence-debug` | Geometry/state/GPU bugs: guest data integrity, native override vs original, Dolphin DFF oracle. Cases: PR #8 (+ ghost regression), #10, #12/#13 |
-| `game-logic-debug` | Frame-rate (fps60) and gameplay bugs: fixed spawn spots, F8 dev menu (any scene, saved spots, god mode, monsters off, free camera, Textures tab), live memory (postool), particle pool/emitter counts, flicker measurement. Case: PR #14 |
+| `game-logic-debug` | Frame-rate (fps60) and gameplay bugs: fixed spawn spots, F8 dev menu (any scene, saved spots, god mode, monsters off, power-ups on/off, free camera, Textures tab), live memory (postool), particle pool/emitter counts, flicker measurement. Case: PR #14 |
 | `manual-yn-bisect` | Locked landing + in-game Y/N toast for human visual checks; fix-only PR workflow (`strip-before-pr.md`) |
 | `audio-debug` | Crackle/clicks/fuzz/stuck loops: capture, per-stage dumps, disc reference decode. Case: PR #11 |
 
