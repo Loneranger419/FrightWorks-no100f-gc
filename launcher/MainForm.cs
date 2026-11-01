@@ -22,6 +22,7 @@ sealed class MainForm : Form
     readonly Gamepads gamepads;
     Label padStatus = null!;
     ThemedCombo layoutBox = null!;
+    readonly List<(PadMapping.Row Row, Label Label, ThemedCombo Box)> padRows = new();
     bool askedLayout;
 
     public MainForm(string? shotDir = null)
@@ -253,7 +254,7 @@ sealed class MainForm : Form
     void BuildControls(FlowLayoutPanel body)
     {
         body.Controls.Add(Note("Gamepads (Xbox, PlayStation, Switch Pro, GameCube adapter...) work right away as a GameCube controller. " +
-                               "To change any button, press F10 in the game and open the Controls page."));
+                               "Change the buttons below, or in the game with F10 > Controls."));
         body.Controls.Add(Title("Gamepad"));
         padStatus = FieldLabel("Looking for controllers...");
         padStatus.Margin = S(0, 4, 0, 6);
@@ -264,15 +265,16 @@ sealed class MainForm : Form
         layoutBox.Items.Add("GameCube");
         layoutBox.Items.Add("Original Xbox");
         layoutBox.SelectedIndex = new GameConfig(configPath).Get("controller", "layout") == "xbox_original" ? 1 : 0;
-        layoutBox.SelectedIndexChanged += (_, _) => SaveLayout(layoutBox.SelectedIndex == 1);
+        layoutBox.SelectedIndexChanged += (_, _) => { SaveLayout(layoutBox.SelectedIndex == 1); ShowXboxRows(); };
         table.Controls.Add(FieldLabel("Layout"));
         table.Controls.Add(layoutBox);
         body.Controls.Add(table);
         body.Controls.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display, " +
                                "LT gum, RT run, LB soap bubble (Xbox White), RB sneak (Xbox Black); the bumpers work together with the " +
-                               "triggers, and the hints in the game name these buttons. Black and White can go on other buttons in F10 > Controls. " +
+                               "triggers, and the hints in the game name these buttons. Black and White can go on other buttons below. " +
                                "GameCube: B head smash and back in menus, X dig / enter / talk, Z + L soap bubble, Z + R sneak (Z = RB). " +
                                "Also in F10 > Controls."));
+        BuildPadMapping(body);
         body.Controls.Add(Title("Keyboard"));
         table = Table();
         foreach (var (what, key) in new[] { ("Move", "W A S D"), ("Camera (C-stick)", "Arrow keys"), ("A (jump)", "Space"), ("B", "Left Shift"),
@@ -493,6 +495,79 @@ sealed class MainForm : Form
     }
 
     // ----- Controllers -----
+    // Gamepad buttons: the [controller] keys F10 > Controls edits too (PadMapping). The game reads them at start.
+    void BuildPadMapping(FlowLayoutPanel body)
+    {
+        body.Controls.Add(Title("Gamepad buttons"));
+        body.Controls.Add(Note("The controller button that presses each GameCube button. Buttons go by position: South is A " +
+                               "on Xbox, Cross on PlayStation, B on Nintendo. Used from the next game start; F10 > Controls " +
+                               "in the game edits the same mapping."));
+        var table = Table();
+        var config = new GameConfig(configPath);
+        foreach (var row in PadMapping.Rows)
+        {
+            var label = FieldLabel(row.Label);
+            label.Font = Body;
+            label.ForeColor = CreamDim;
+            var box = new ThemedCombo();
+            foreach (var choice in PadMapping.ChoicesFor(row)) box.Items.Add(choice);
+            table.Controls.Add(label);
+            table.Controls.Add(box);
+            padRows.Add((row, label, box));
+            ShowPadValue(row, box, config.Get("controller", row.Key));
+            box.SelectedIndexChanged += (_, _) =>
+            {
+                if (box.SelectedItem is not PadMapping.Choice choice) return;  // the "(custom)" entry
+                var c = new GameConfig(configPath);
+                string? old = c.Get("controller", row.Key);
+                if (old != null && PadMapping.Split(old).Name == choice.Name) return;
+                if (old == null && choice.Name == row.Default) return;  // shown as the default already
+                c.SetString("controller", row.Key, PadMapping.Compose(choice.Name, old));
+                c.Save();
+            };
+        }
+        body.Controls.Add(table);
+        ShowXboxRows();
+        var restore = new PlankButton("Restore defaults", (_, _) => RestorePadDefaults());
+        restore.Margin = S(0, 4, 0, 8);
+        body.Controls.Add(restore);
+    }
+
+    // Selects the value's pad button; one the list doesn't know stays as it is, shown as "(custom)".
+    static void ShowPadValue(PadMapping.Row row, ThemedCombo box, string? value)
+    {
+        string name = value == null ? row.Default : PadMapping.Split(value).Name;
+        for (int i = box.Items.Count - 1; i >= 0; i--)
+            if (box.Items[i] is string) box.Items.RemoveAt(i);
+        int index = -1;
+        for (int i = 0; i < box.Items.Count; i++)
+            if (box.Items[i] is PadMapping.Choice c && c.Name == name) { index = i; break; }
+        if (index < 0) index = box.Items.Add("(custom) " + value);
+        box.SelectedIndex = index;
+    }
+
+    // Black / White exist only with the original Xbox layout.
+    void ShowXboxRows()
+    {
+        bool xbox = layoutBox.SelectedIndex == 1;
+        foreach (var (row, label, box) in padRows)
+            if (row.Xbox) { label.Visible = xbox; box.Visible = xbox; }
+    }
+
+    // Writes every GameCube button's default (so a mapping saved for one controller in F10 doesn't stay in force) and
+    // drops the Black / White choices.
+    void RestorePadDefaults()
+    {
+        var c = new GameConfig(configPath);
+        foreach (var row in PadMapping.Rows)
+        {
+            if (row.Xbox) c.Remove("controller", row.Key);
+            else c.SetString("controller", row.Key, row.Default);
+        }
+        c.Save();
+        foreach (var (row, _, box) in padRows) ShowPadValue(row, box, c.Get("controller", row.Key));
+    }
+
     void SaveLayout(bool original)
     {
         var c = new GameConfig(configPath);

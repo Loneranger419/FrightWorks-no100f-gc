@@ -874,28 +874,31 @@ void DrawGamepadSettings(uint32_t selectedGamePort) {
         PADClearPort(selectedGamePort);
         g_configuredControllerIndices.fill(std::numeric_limits<int32_t>::min());
     }
-    ImGui::Separator();
-    controller_mapping_wizard::DrawSetupList();
-    DrawWiiRemoteSettings(selectedGamePort);
     const uint32_t controllerCount = PADCount();
     if (controllerCount == 0) {
         ImGui::TextDisabled("No controller connected");
-        return;
-    }
-
-    ImGui::SetNextItemWidth(OverlayTheme::Px(320.0f));
-    if (ImGui::BeginCombo("##assign", "Assign a connected controller...")) {
-        for (uint32_t index = 0; index < controllerCount; ++index) {
-            const char* name = PADGetNameForControllerIndex(index);
-            ImGui::PushID(static_cast<int>(index));
-            if (ImGui::Selectable(name != nullptr ? name : "Unknown controller")) {
-                PADSetPortForIndex(index, selectedGamePort);
-                g_configuredControllerIndices.fill(std::numeric_limits<int32_t>::min());
-                ApplyConfiguredMappings();
+    } else {
+        ImGui::SetNextItemWidth(OverlayTheme::Px(320.0f));
+        if (ImGui::BeginCombo("##assign", "Assign a connected controller...")) {
+            for (uint32_t index = 0; index < controllerCount; ++index) {
+                const char* name = PADGetNameForControllerIndex(index);
+                ImGui::PushID(static_cast<int>(index));
+                if (ImGui::Selectable(name != nullptr ? name : "Unknown controller")) {
+                    PADSetPortForIndex(index, selectedGamePort);
+                    g_configuredControllerIndices.fill(std::numeric_limits<int32_t>::min());
+                    ApplyConfiguredMappings();
+                }
+                ImGui::PopID();
             }
-            ImGui::PopID();
+            ImGui::EndCombo();
         }
-        ImGui::EndCombo();
+    }
+    ImGui::Separator();
+    controller_mapping_wizard::DrawSetupList();
+    DrawWiiRemoteSettings(selectedGamePort);
+    DrawRumbleSettings();  // above the mapping, and shown with no controller connected too
+    if (controllerCount == 0) {
+        return;
     }
 
     uint32_t mappingCount = 0;
@@ -1062,7 +1065,6 @@ void DrawGamepadSettings(uint32_t selectedGamePort) {
         ImGui::PopID();
     }
     DrawExpressionSettings();
-    DrawRumbleSettings();
 }
 
 void DrawAudioSettings() {
@@ -1790,7 +1792,7 @@ void DrawAboutPage() {
     }
     SectionTitle("Keys");
     const std::array<std::pair<const char*, const char*>, 6> keys = {{
-        {"F10 / Esc", "Settings (this board) / back to the game"},
+        {"F10 / Esc / Back", "Settings (this board) / back to the game (Back = the controller's Back / Select)"},
         {"F11", "Fullscreen or window"},
         {"F2", "Screenshot (Screenshots folder beside the launcher)"},
         {"F1", "Project page in your browser"},
@@ -1925,7 +1927,7 @@ void DrawTopBar() {
         ImGui::SetCursorPosY(ImGui::GetCursorPosY() + Px(6));
         const float footerY = ImGui::GetCursorPosY();
         const std::array<std::pair<const char*, const char*>, 5> footerKeys = {{
-            {"Esc / F10", "back to the game"}, {"LB / RB", "page"}, {"F2", "screenshot"}, {"F11", "fullscreen"},
+            {"Esc / F10 / Back", "back to the game"}, {"LB / RB", "page"}, {"F2", "screenshot"}, {"F11", "fullscreen"},
             {"F1", "project page"},
         }};
         for (size_t i = 0; i < footerKeys.size(); ++i) {
@@ -2120,6 +2122,28 @@ void InitializeRuntimeSettings() noexcept {
     InputBindings::SetInputBlocked(false);
 }
 
+// The controller's Back / Select / Create button has no GameCube button, so the game never sees it: it opens and
+// closes F10 like the key. Not while a mapping uses it (F10's PlayStation preset puts Z there, or a remap / Black /
+// White does), so a bound Back still only does its job.
+bool BackButtonBound() {
+    for (uint32_t port = 0; port < PAD_MAX_CONTROLLERS; ++port) {
+        for (const bool alt : {false, true}) {
+            uint32_t count = 0;
+            const PADButtonMapping* mappings = alt ? PADGetAltButtonMappings(port, &count) : PADGetButtonMappings(port, &count);
+            for (uint32_t i = 0; mappings != nullptr && i < count; ++i) {
+                if (mappings[i].nativeButton == SDL_GAMEPAD_BUTTON_BACK) return true;
+            }
+        }
+    }
+    if (RuntimeConfigFile::XboxOriginalLayout()) {
+        for (size_t action = 0; action < 2; ++action) {
+            const NativeButtonItem* native = FindNativeButton(RuntimeConfigFile::XboxButton(action));
+            if (native != nullptr && native->nativeButton == SDL_GAMEPAD_BUTTON_BACK) return true;
+        }
+    }
+    return false;
+}
+
 void HandleEvents(const AuroraEvent* events) noexcept {
     if (!events) {
         return;
@@ -2154,7 +2178,10 @@ void HandleEvents(const AuroraEvent* events) noexcept {
         if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F2)) {
             TakeScreenshot();
         }
-        if (!g_rebind.active && IsToggleKey(ev->sdl, SDL_SCANCODE_F10)) {
+        const bool backButton = ev->sdl.type == SDL_EVENT_GAMEPAD_BUTTON_DOWN &&
+                                ev->sdl.gbutton.button == SDL_GAMEPAD_BUTTON_BACK && !controller_mapping_wizard::IsActive() &&
+                                !BackButtonBound();
+        if (!g_rebind.active && (IsToggleKey(ev->sdl, SDL_SCANCODE_F10) || backButton)) {
             SetTopBarVisible(!g_topBarVisible);
             ApplyInputBlockState();
         }
