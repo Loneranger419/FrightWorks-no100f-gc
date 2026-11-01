@@ -224,6 +224,24 @@ sealed class ThemedCombo : ComboBox
         Margin = Theme.S(0, 4, 0, 4);
     }
 
+    // The wheel over a closed list scrolls the page instead of changing the choice (it used to change a setting, and save
+    // it, just by scrolling past).
+    protected override void WndProc(ref Message m)
+    {
+        const int WM_MOUSEWHEEL = 0x020A;
+        if (m.Msg == WM_MOUSEWHEEL && !DroppedDown)
+        {
+            Control? scroller = Parent;
+            while (scroller != null && !(scroller is ScrollableControl { AutoScroll: true })) scroller = scroller.Parent;
+            if (scroller != null) SendMessage(scroller.Handle, m.Msg, m.WParam, m.LParam);
+            return;
+        }
+        base.WndProc(ref m);
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+
     protected override void OnDrawItem(DrawItemEventArgs e)
     {
         if (e.Index < 0) return;
@@ -278,8 +296,24 @@ sealed class Board : Panel
         Visible = false;
         close = new PlankButton("X", (_, _) => onClose()) { Anchor = AnchorStyles.Top | AnchorStyles.Right };
         Controls.Add(close);
-        Body = new Panel { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Color.Transparent };
+        Body = new ScrollBody { Dock = DockStyle.Fill, AutoScroll = true, BackColor = Color.Transparent };
         Controls.Add(Body);
+    }
+
+    // The page's panels and labels are see-through over the board, which doesn't move. Windows scrolls by shifting the
+    // old pixels and repainting only the new strip, which smeared the rows; repaint the whole page after every scroll.
+    sealed class ScrollBody : Panel
+    {
+        public ScrollBody() => DoubleBuffered = true;
+
+        protected override void OnScroll(ScrollEventArgs se) { base.OnScroll(se); Repaint(); }
+        protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); Repaint(); }
+
+        void Repaint()
+        {
+            Invalidate(true);
+            Update();
+        }
     }
 
     protected override void OnLayout(LayoutEventArgs e)
