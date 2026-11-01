@@ -1,0 +1,203 @@
+diff --git a/wiicompiled/runtime/src/hle/vi.cpp b/wiicompiled/runtime/src/hle/vi.cpp
+index c9d68ec..8e1e7d9 100644
+--- a/wiicompiled/runtime/src/hle/vi.cpp
++++ b/wiicompiled/runtime/src/hle/vi.cpp
+@@ -32,6 +32,11 @@
+ #include <string>
+ #include <cstdint>
+ #include <cstdio>
++#include <cstring>
++#include <filesystem>
++#include <sstream>
++#include <unordered_map>
++#include <unordered_set>
+ #include <iostream>
+ #include <mutex>
+ #include <thread>
+@@ -1337,8 +1342,186 @@ extern "C" void VISetBlack_HLE_801bab2c(CpuContext* ctx)
+ }
+ PPC_NATIVE_OVERRIDE_VOID(8010BD8C, VISetBlack_HLE_801bab2c, (CpuContext* ctx), (ctx));
+ 
++// DEBUG postool: every 20 main-loop frames, run the commands in postool.txt (cwd = Play) and delete it.
++//   dump NAME            MEM1 big-endian to postool/NAME.bin
++//   peek ADDR [N]        N (default 16) words from ADDR to postool/peek.txt
++//   poke ADDR HEX...     write words (floats as hex) starting at ADDR
++//   F9 (global hotkey)   append Scooby's spot to postool/spots.txt and beep
++// Scooby's model matrix (xMat4x3: right, up, at, pos) is at [0x802453C8].
++extern "C" __declspec(dllimport) short __stdcall GetAsyncKeyState(int key);
++extern "C" __declspec(dllimport) int __stdcall MessageBeep(unsigned type);
++static void No100fPosToolSaveSpot()
++{
++    uint32_t mat = 0;
++    if (!Memory::TryRead32(0x802453C8u, mat) || mat < 0x80000000u) return;
++    float v[16];
++    for (int i = 0; i < 16; ++i) v[i] = Memory::ReadFloat32(mat + i * 4);
++    static int n = 0;
++    std::filesystem::create_directories("postool");
++    char b[160];
++    std::snprintf(b, sizeof b, "spot%d pos %.3f %.3f %.3f yaw %.4f\n", ++n, v[12], v[13], v[14],
++                  std::atan2(v[8], v[10]));
++    std::ofstream("postool/spots.txt", std::ios::app) << b;
++    MessageBeep(0);
++}
++
++//   trace ADDR N         for N frames: list length and first 4 particles of the list whose head is [ADDR]
++//                        (particle: +0 next, +8 life, +0x10 pos, +0x1C size) to postool/trace.txt
++static uint32_t s_traceHeadPtr = 0, s_traceLeft = 0;
++static void No100fPosToolTrace()
++{
++    static uint32_t frame = 0;
++    ++frame;
++    if (!s_traceLeft) return;
++    --s_traceLeft;
++    std::ofstream out("postool/trace.txt", std::ios::app);
++    uint32_t p = 0, n = 0;
++    Memory::TryRead32(s_traceHeadPtr, p);
++    std::string head;
++    static std::vector<uint32_t> prev;
++    std::vector<uint32_t> cur;
++    for (uint32_t q = p; q >= 0x80000000u && n < 2000; ++n) {
++        cur.push_back(q);
++        if (n < 4) {
++            char b[96];
++            std::snprintf(b, sizeof b, " %08X(%.2f %.2f %.2f L%.2f)", q, Memory::ReadFloat32(q + 0x10), Memory::ReadFloat32(q + 0x14),
++                          Memory::ReadFloat32(q + 0x18), Memory::ReadFloat32(q + 8));
++            head += b;
++        }
++        if (!Memory::TryRead32(q, q)) break;
++    }
++    if (cur == prev) return;  // the main loop polls the retrace count more than once per frame
++    std::string gone;
++    for (size_t i = 0; i < prev.size(); ++i)
++        if (std::find(cur.begin(), cur.end(), prev[i]) == cur.end()) {
++            char b[96];
++            std::snprintf(b, sizeof b, " %08X@%zu(%.2f %.2f %.2f L%.2f)", prev[i], i, Memory::ReadFloat32(prev[i] + 0x10),
++                          Memory::ReadFloat32(prev[i] + 0x14), Memory::ReadFloat32(prev[i] + 0x18), Memory::ReadFloat32(prev[i] + 8));
++            gone += b;
++        }
++    prev = cur;
++    out << "t" << frame << " n" << n << head << " | gone" << gone << "\n";
++}
++
++//   births SECONDS       particle births per owner emitter asset (pool 2000 x 0x50 at 0x80210858: +8 life, +0x3C owner)
++//                        for SECONDS of wall time to postool/births.txt; "p1" = asset also emitted via the per-frame
++//                        update 0x800C4AAC (set by no100f_particles.cpp); "p2" = also via 0x800C5C0C (probe in that override);
++//                        "vel" = mean |velocity| at birth (MOVE adds it to the position every frame), speed = vel x frames/s
++std::unordered_set<uint32_t> g_no100fPath1Assets, g_no100fPath2Assets;
++static void No100fPosToolBirths(double seconds)
++{
++    struct Slot { float life = 0; uint32_t owner = 0; };
++    static std::vector<Slot> prev;
++    static std::unordered_map<uint32_t, uint64_t> births;
++    static std::unordered_map<uint32_t, double> velSum;
++    static std::chrono::steady_clock::time_point until{}, start{};
++    static uint64_t frames = 0;
++    const auto now = std::chrono::steady_clock::now();
++    if (seconds > 0) {
++        prev.clear(); births.clear(); velSum.clear(); frames = 0;
++        start = now;
++        until = now + std::chrono::duration_cast<std::chrono::steady_clock::duration>(std::chrono::duration<double>(seconds));
++    }
++    if (until == std::chrono::steady_clock::time_point{}) return;
++    std::vector<Slot> cur(2000);
++    for (uint32_t i = 0; i < 2000; ++i) {
++        const uint32_t p = 0x80210858u + i * 0x50u;
++        cur[i].life = Memory::ReadFloat32(p + 8);
++        cur[i].owner = Memory::Read32(p + 0x3C);
++    }
++    // count frames: the main loop polls the retrace count several times per frame, the pool changes once per frame
++    if (!prev.empty()) {
++        bool changed = false;
++        for (uint32_t i = 0; i < 2000; ++i) {
++            if (cur[i].life != prev[i].life || cur[i].owner != prev[i].owner) changed = true;
++            if (cur[i].owner && (cur[i].owner != prev[i].owner || cur[i].life > prev[i].life + 1e-4f)) {
++                ++births[cur[i].owner];
++                const uint32_t p = 0x80210858u + i * 0x50u;
++                const float vx = Memory::ReadFloat32(p + 0x20), vy = Memory::ReadFloat32(p + 0x24), vz = Memory::ReadFloat32(p + 0x28);
++                velSum[cur[i].owner] += std::sqrt(vx * vx + vy * vy + vz * vz);
++            }
++        }
++        if (changed) ++frames;
++    }
++    prev = std::move(cur);
++    if (now < until) return;
++    until = {};
++    const double secs = std::chrono::duration<double>(now - start).count();
++    std::ofstream out("postool/births.txt", std::ios::app);
++    char b[160];
++    std::snprintf(b, sizeof b, "window %.2fs pool-changing frames %llu (%.1f/s)\n", secs, (unsigned long long)frames, frames / secs);
++    out << b;
++    for (const auto& [owner, n] : births) {
++        uint32_t id = 0;
++        Memory::TryRead32(owner, id);
++        const double vel = velSum[owner] / n;
++        std::snprintf(b, sizeof b, "owner %08X id %08X births %llu (%.1f/s) vel %.5f speed %.3f/s%s%s\n", owner, id,
++                      (unsigned long long)n, n / secs, vel, vel * frames / secs, g_no100fPath1Assets.count(owner) ? " p1" : "",
++                      g_no100fPath2Assets.count(owner) ? " p2" : "");
++        out << b;
++    }
++}
++
++static void No100fPosToolPoll()
++{
++    No100fPosToolTrace();
++    No100fPosToolBirths(0);
++    static bool f9Down = false;
++    const bool f9 = (GetAsyncKeyState(0x78) & 0x8000) != 0;
++    if (f9 && !f9Down) No100fPosToolSaveSpot();
++    f9Down = f9;
++    static uint32_t tick = 0;
++    if (++tick % 20 != 0) return;
++    std::ifstream in("postool.txt");
++    if (!in) return;
++    std::vector<std::string> lines;
++    for (std::string l; std::getline(in, l);) lines.push_back(l);
++    in.close();
++    std::remove("postool.txt");
++    std::filesystem::create_directories("postool");
++    for (const std::string& l : lines) {
++        char cmd[16] = {}, name[128] = {};
++        if (std::sscanf(l.c_str(), "%15s %127s", cmd, name) < 1) continue;
++        if (std::string(cmd) == "dump") {
++            std::vector<uint8_t> buf(Memory::kMem1Size);
++            for (size_t i = 0; i < buf.size(); i += 4) {
++                uint32_t v = 0;
++                Memory::TryRead32(Memory::kMem1CachedBase + static_cast<uint32_t>(i), v);
++                buf[i] = v >> 24; buf[i + 1] = v >> 16; buf[i + 2] = v >> 8; buf[i + 3] = v;
++            }
++            std::ofstream(std::string("postool/") + name + ".bin", std::ios::binary)
++                .write(reinterpret_cast<const char*>(buf.data()), buf.size());
++        } else if (std::string(cmd) == "peek") {
++            uint32_t addr = 0, n = 16;
++            std::sscanf(l.c_str(), "%*s %x %u", &addr, &n);
++            std::ofstream out("postool/peek.txt", std::ios::app);
++            for (uint32_t i = 0; i < n; ++i) {
++                uint32_t v = 0;
++                Memory::TryRead32(addr + i * 4, v);
++                float f; std::memcpy(&f, &v, 4);
++                char b[64]; std::snprintf(b, sizeof b, "%08X %08X %g\n", addr + i * 4, v, f);
++                out << b;
++            }
++        } else if (std::string(cmd) == "births") {
++            double s = 10;
++            std::sscanf(l.c_str(), "%*s %lf", &s);
++            No100fPosToolBirths(s);
++        } else if (std::string(cmd) == "trace") {
++            std::sscanf(l.c_str(), "%*s %x %u", &s_traceHeadPtr, &s_traceLeft);
++        } else if (std::string(cmd) == "poke") {
++            std::istringstream ss(l);
++            std::string c, a, w;
++            ss >> c >> a;
++            uint32_t addr = static_cast<uint32_t>(std::stoul(a, nullptr, 16));
++            while (ss >> w) { Memory::TryWrite32(addr, static_cast<uint32_t>(std::stoul(w, nullptr, 16))); addr += 4; }
++        }
++    }
++    std::ofstream("postool/done.txt") << lines.size() << "\n";
++}
++
+ extern "C" void VIGetRetraceCount_HLE_801baba4(CpuContext* ctx)
+ {
++    if (ctx->lr == 0x800AD690u) No100fPosToolPoll();
+     uint32_t count = 0;
+     {
+         std::lock_guard<std::mutex> lock(g_viMutex);

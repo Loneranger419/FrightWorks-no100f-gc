@@ -1,0 +1,148 @@
+diff --git a/wiicompiled/runtime/src/hle/gx/gx_dl.cpp b/wiicompiled/runtime/src/hle/gx/gx_dl.cpp
+index d0689bb..6e49a4f 100644
+--- a/wiicompiled/runtime/src/hle/gx/gx_dl.cpp
++++ b/wiicompiled/runtime/src/hle/gx/gx_dl.cpp
+@@ -1354,6 +1354,7 @@ extern "C" void GX__CallDisplayList_80172f64(uint32_t listAddr, uint32_t nbytes)
+             }
+         }
+         if (s_skipNext) { s_skipNext = false; return; }
++        DlTailCheck(listAddr, nbytes, list);
+ 
+         {  // NO100F diagnostic: guest lists holding a draw whose vertices run past the list (env NO100F_DL_CHECK)
+             static const bool dlCheck = std::getenv("NO100F_DL_CHECK") != nullptr;
+diff --git a/wiicompiled/runtime/src/hle/gx/gx_fifo.cpp b/wiicompiled/runtime/src/hle/gx/gx_fifo.cpp
+index 26eb176..a8f1fc4 100644
+--- a/wiicompiled/runtime/src/hle/gx/gx_fifo.cpp
++++ b/wiicompiled/runtime/src/hle/gx/gx_fifo.cpp
+@@ -55,9 +55,11 @@ PPC_NATIVE_OVERRIDE_VOID(801022C8, No100f_GXBeginDisplayList, (uint32_t list, ui
+ 
+ extern "C" uint32_t No100f_GXEndDisplayList() {
+     const uint32_t count = g_dlRecordState.count;
++    const uint32_t base = g_dlRecordState.base, capacity = g_dlRecordState.size;
+     EndDisplayListRecording();
+     uint8_t wrapped = 0;
+     try { wrapped = Memory::Read8(kDlFifoAddr + kDlWrapFlagOffset); } catch (const Memory::AccessViolation&) {}
++    DlTailSnapshot(base, capacity, count, wrapped ? 0u : count);
+     return wrapped ? 0u : count;  // an overflowed list returns 0, as the SDK does
+ }
+ PPC_NATIVE_OVERRIDE(80102390, No100f_GXEndDisplayList, uint32_t, (), ());
+diff --git a/wiicompiled/runtime/src/hle/gx/gx_frame.cpp b/wiicompiled/runtime/src/hle/gx/gx_frame.cpp
+index 6df3885..2a82e36 100644
+--- a/wiicompiled/runtime/src/hle/gx/gx_frame.cpp
++++ b/wiicompiled/runtime/src/hle/gx/gx_frame.cpp
+@@ -2,9 +2,99 @@
+ #include "runtime_log.h"
+ 
+ #include <cstdio>
++#include <cstdlib>
++#include <string>
++#include <unordered_map>
++#include <vector>
+ 
+ GxDisplayListState g_dlRecordState{};
+ 
++namespace {
++struct DlTailSnap {
++    uint32_t capacity = 0, count = 0, returned = 0, lr = 0;
++    std::vector<uint8_t> bytes;
++};
++std::unordered_map<uint32_t, DlTailSnap> g_dlTailSnaps;
++bool DlTailEnabled() {
++    static const bool on = std::getenv("NO100F_DLTAIL") != nullptr;
++    return on;
++}
++// Curtain-like list: starts with a triangle-strip draw of 76 or 86 vertices.
++bool DlTailInteresting(const uint8_t* p, uint32_t n) {
++    if (n < 3 || (p[0] & 0xF8) != 0x98) return false;
++    const uint32_t cnt = (uint32_t(p[1]) << 8) | p[2];
++    return cnt == 76 || cnt == 86;
++}
++std::string DlTailHex(const uint8_t* p, uint32_t from, uint32_t to) {
++    std::string s;
++    for (uint32_t i = from; i < to; ++i) { char t[4]; std::snprintf(t, sizeof t, "%02x", p[i]); s += t; }
++    return s;
++}
++}  // namespace
++
++void DlTailSnapshot(uint32_t base, uint32_t capacity, uint32_t count, uint32_t returned) {
++    if (!DlTailEnabled() || base == 0 || count == 0 || count > 8192) return;
++    DlTailSnap snap;
++    snap.capacity = capacity; snap.count = count; snap.returned = returned;
++    if (const CpuContext* ctx = TryGetCpuContext()) snap.lr = ctx->lr;
++    const uint8_t* src = nullptr;
++    try { src = static_cast<const uint8_t*>(GuestToHostPtr(base, count)); } catch (const Memory::AccessViolation&) {}
++    if (src == nullptr) return;
++    snap.bytes.assign(src, src + count);
++    static int logged = 0;
++    if (DlTailInteresting(snap.bytes.data(), count) && logged < 40) {
++        ++logged;
++        const uint32_t cnt = (uint32_t(snap.bytes[1]) << 8) | snap.bytes[2];
++        const uint32_t vsz = cnt ? (count - 3) / cnt : 0;
++        uint32_t maxIdx = 0;
++        for (uint32_t v = 0; v < cnt && 3 + v * vsz < count; ++v) maxIdx = std::max<uint32_t>(maxIdx, snap.bytes[3 + v * vsz]);
++        RT_LOGF(RT_TAG_GX, "[dltail] build %08X cap %u count %u ret %u lr %08X cnt %u vsz %u maxIdx %u tail %s\n", base,
++                capacity, count, returned, snap.lr, cnt, vsz, maxIdx,
++                DlTailHex(snap.bytes.data(), count > 32 ? count - 32 : 0, count).c_str());
++    }
++    g_dlTailSnaps[base] = std::move(snap);
++}
++
++void DlTailCheck(uint32_t addr, uint32_t nbytes, const uint8_t* list) {
++    if (!DlTailEnabled() || list == nullptr) return;
++    static int logged = 0, okLogged = 0;
++    const bool interesting = DlTailInteresting(list, nbytes);
++    const auto it = g_dlTailSnaps.find(addr);
++    if (it == g_dlTailSnaps.end()) {
++        if (interesting && logged < 40) {
++            ++logged;
++            RT_LOGF(RT_TAG_GX, "[dltail] call %08X nbytes %u: no snapshot (not built by GXBegin/EndDisplayList)\n", addr,
++                    nbytes);
++        }
++        return;
++    }
++    const DlTailSnap& snap = it->second;
++    uint32_t diff = UINT32_MAX;
++    const uint32_t n = std::min<uint32_t>(nbytes, snap.count);
++    for (uint32_t i = 0; i < n; ++i) {
++        if (list[i] != snap.bytes[i]) { diff = i; break; }
++    }
++    if (diff == UINT32_MAX && nbytes == snap.count) {
++        if (interesting && okLogged < 10) {
++            ++okLogged;
++            RT_LOGF(RT_TAG_GX, "[dltail] call %08X nbytes %u: matches build\n", addr, nbytes);
++        }
++        return;
++    }
++    if (logged >= 60) return;
++    ++logged;
++    if (diff == UINT32_MAX) {
++        RT_LOGF(RT_TAG_GX, "[dltail] call %08X nbytes %u != built count %u (ret %u lr %08X)%s\n", addr, nbytes,
++                snap.count, snap.returned, snap.lr, interesting ? " CURTAINLIKE" : "");
++        return;
++    }
++    const uint32_t from = diff & ~15u, to = std::min<uint32_t>(n, from + 32);
++    RT_LOGF(RT_TAG_GX,
++            "[dltail] call %08X nbytes %u built %u lr %08X: first diff +%u (of %u)%s\n  built %s\n  now   %s\n", addr,
++            nbytes, snap.count, snap.lr, diff, n, interesting ? " CURTAINLIKE" : "",
++            DlTailHex(snap.bytes.data(), from, to).c_str(), DlTailHex(list, from, to).c_str());
++}
++
+ void BeginDisplayListRecording(uint32_t listAddr, uint32_t sizeBytes) {
+     g_dlRecordState.base = listAddr;
+     g_dlRecordState.size = sizeBytes;
+diff --git a/wiicompiled/runtime/src/hle/gx/gx_internal.h b/wiicompiled/runtime/src/hle/gx/gx_internal.h
+index 6d4afe6..35384b4 100644
+--- a/wiicompiled/runtime/src/hle/gx/gx_internal.h
++++ b/wiicompiled/runtime/src/hle/gx/gx_internal.h
+@@ -309,6 +309,11 @@ void SpmBBoxPosition(const float* p, int count);
+ // Flushes the shadow cursor/count back into guest memory and stops recording.
+ void EndDisplayListRecording();
+ 
++// NO100F diagnostic (env NO100F_DLTAIL, issue #6): snapshot each recorded list at GXEndDisplayList and compare it
++// at GXCallDisplayList time.
++void DlTailSnapshot(uint32_t base, uint32_t capacity, uint32_t count, uint32_t returned);
++void DlTailCheck(uint32_t addr, uint32_t nbytes, const uint8_t* list);
++
+ // --- Helper Functions ---
+ void WriteDisplayListData(uint32_t val, uint32_t sizeBytes);
+ void BeginNextAuroraFrameWithRetry(std::chrono::milliseconds timeout = std::chrono::milliseconds(100));

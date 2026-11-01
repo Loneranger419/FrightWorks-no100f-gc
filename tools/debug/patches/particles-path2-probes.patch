@@ -1,0 +1,56 @@
+--- a/wiicompiled/runtime/src/hle/no100f_particles_entity.cpp
++++ b/wiicompiled/runtime/src/hle/no100f_particles_entity.cpp
+@@ -15,6 +15,10 @@
+ // Native in full: an override's address is excluded from translation, so the original body cannot be called.
+ #include <cstdint>
+ #include <unordered_map>
++#include <filesystem>  // DEBUG probe
++#include <fstream>     // DEBUG probe
++#include <map>         // DEBUG probe
++#include <unordered_set>  // DEBUG probe
+ #include "abi_bridge.h"
+ #include "memory.h"
+ #include "hle_stubs.h"
+@@ -113,6 +117,42 @@
+         // Emit only counts the timer (+0x1C) down while it is above 0; at 0 it emits on every call.
+         if (!(Memory::ReadFloat32(emitter + 0x1C) > 0.0f)) emit = EmitThisFrame(emitter);
+     }
++    // DEBUG probe (strip before PR): p2 tag for postool births, call streaks per emitter to postool/streaks.txt
++    {
++        extern std::unordered_set<uint32_t> g_no100fPath2Assets;
++        g_no100fPath2Assets.insert(asset);
++        struct St { uint32_t last = 0, len = 0, calls = 0, skipped = 0, dtFixed = 0; uint64_t popSum = 0, popFrames = 0;std::map<uint32_t, uint32_t> hist; std::map<std::pair<uint32_t, uint32_t>, uint32_t> sites; };
++        static std::map<uint32_t, St> st;  // by asset
++        static uint32_t lastDump = 0;
++        const uint32_t frame = Memory::Read32(kFrameCount);
++        St& s = st[asset];
++        if (frame != s.last || s.calls == 0) {  // population of the emitter's particle system, once per frame
++            const uint32_t pars = Memory::Read32(emitter + 0x48);
++            const uint32_t sys = pars ? Memory::Read32(pars + 0x20) : 0;
++            if (sys) { s.popSum += Memory::Read32(sys + 8); ++s.popFrames; }
++        }
++        ++s.calls;
++        ++s.sites[{static_cast<uint32_t>(ctx->lr), flags}];
++        if (!emit) ++s.skipped;
++        if (static_cast<float>(ctx->fpr[1].d) == 1.0f / 30.0f) ++s.dtFixed;
++        if (s.len == 0) s.len = 1;
++        else if (frame == s.last + 1) ++s.len;
++        else if (frame != s.last) { ++s.hist[s.len > 9 ? 9 : s.len]; s.len = 1; }
++        s.last = frame;
++        if (frame - lastDump >= 300) {
++            lastDump = frame;
++            std::filesystem::create_directories("postool");
++            std::ofstream out("postool/streaks.txt");
++            for (auto& [a, x] : st) {
++                out << std::hex << "asset " << Memory::Read32(a) << std::dec << " calls " << x.calls << " skipped " << x.skipped
++                    << " dt1/30 " << x.dtFixed << " streaks(len:count)";
++                for (auto& [l, c] : x.hist) out << " " << l << ":" << c;
++                out << " open:" << x.len << " avgpop " << (x.popFrames ? double(x.popSum) / x.popFrames : -1.0) << std::hex;
++                for (auto& [k, c] : x.sites) out << " lr " << k.first << " flags " << k.second << " x" << std::dec << c << std::hex;
++                out << std::dec << "\n";
++            }
++        }
++    }
+     uint32_t result = 0;
+     if (emit) {
+         ctx->gpr[3] = emitter;
