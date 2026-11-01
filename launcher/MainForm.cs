@@ -27,6 +27,10 @@ sealed class MainForm : Form
     readonly Panel content = new() { Dock = DockStyle.Fill };
     readonly List<(Button button, Control page)> pages = new();
     Label playStatus = null!, dumpHelp = null!;
+    readonly Gamepads gamepads;
+    Label padStatus = null!;
+    ComboBox layoutBox = null!;
+    bool askedLayout;
     Button chooseDisc = null!, playButton = null!;
     ProgressBar progress = null!;
 
@@ -38,6 +42,7 @@ sealed class MainForm : Form
         userData = Path.Combine(play, "UserData");
         configPath = Path.Combine(userData, "Config.toml");
         modsDir = Path.Combine(userData, "mods");
+        gamepads = new Gamepads(play);
         // Release: the disc lives in data\Disc next to the game. Dev tree (Play\): the shared Disc\ at the root.
         discDir = IsRelease ? Path.Combine(play, "Disc", "DATA") : Path.Combine(root, "Disc", "DATA");
 
@@ -75,9 +80,13 @@ sealed class MainForm : Form
         AddPage(nav, "Controls", BuildControlsPage());
         AddPage(nav, "Mods", BuildModsPage());
         ShowPage(pages[0].button);
+        // Connected controllers: shown on the Controls page; an Xbox pad asks for the layout once.
+        var padTimer = new System.Windows.Forms.Timer { Interval = 1000 };
+        padTimer.Tick += (_, _) => RefreshGamepads();
+        FormClosed += (_, _) => { padTimer.Stop(); gamepads.Dispose(); };
         Shown += (_, _) =>
         {
-            if (shotDir == null) return;
+            if (shotDir == null) { gamepads.Start(); padTimer.Start(); return; }
             // Headless visual check: every page drawn to <dir>\<page>.png, plus the two pointers.
             Directory.CreateDirectory(shotDir);
             shotShift = 9;
@@ -496,7 +505,13 @@ sealed class MainForm : Form
     {
         var exe = Path.Combine(play, GameExe);
         if (!File.Exists(exe)) { MessageBox.Show(this, "The game files (the data folder) are missing. Re-extract the download next to this launcher.", AppTitle); return; }
-        Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = play, UseShellExecute = true });
+        gamepads.Pause();  // the game has the controllers to itself
+        var game = Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = play, UseShellExecute = true });
+        if (game != null)
+        {
+            game.EnableRaisingEvents = true;
+            game.Exited += (_, _) => { try { BeginInvoke(() => gamepads.Start()); } catch (InvalidOperationException) { } };
+        }
         WindowState = FormWindowState.Minimized;
     }
 
@@ -544,6 +559,8 @@ sealed class MainForm : Form
         var (card, body) = NewCard("Controls");
         body.Controls.Add(Note("Gamepads (Xbox, PlayStation, Switch Pro, GameCube adapter...) work right away as a GameCube controller. " +
                                "To change any button, press F10 in the game and open Controller settings."));
+        padStatus = new Label { AutoSize = true, ForeColor = Ink, Font = new Font("Segoe UI", 10.5f, FontStyle.Bold), Margin = S(0, 6, 0, 2) };
+        body.Controls.Add(padStatus);
         body.Controls.Add(BuildLayoutRow());
         body.Controls.Add(new Label { Text = "Keyboard", Font = new Font("Segoe UI", 13f, FontStyle.Bold), ForeColor = Ink, AutoSize = true, Margin = S(0, 10, 0, 0) });
         var table = new TableLayoutPanel { AutoSize = true, ColumnCount = 2, BackColor = Paper, Margin = S(0, 8, 0, 8), CellBorderStyle = TableLayoutPanelCellBorderStyle.Single };
@@ -562,7 +579,7 @@ sealed class MainForm : Form
     {
         var row = new FlowLayoutPanel { AutoSize = true, Margin = S(0, 6, 0, 6), BackColor = Paper };
         row.Controls.Add(new Label { Text = "Gamepad layout", AutoSize = true, ForeColor = Ink, Font = new Font("Segoe UI", 10.5f, FontStyle.Bold), Margin = S(0, 8, 16, 0) });
-        var box = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(360), Cursor = glassHand };
+        var box = layoutBox = new ComboBox { DropDownStyle = ComboBoxStyle.DropDownList, Width = S(360), Cursor = glassHand };
         box.Items.Add("GameCube");
         box.Items.Add("Original Xbox");
         box.SelectedIndex = new GameConfig(configPath).Get("controller", "layout") == "xbox_original" ? 1 : 0;
@@ -580,6 +597,51 @@ sealed class MainForm : Form
                                "GameCube: B head smash and back in menus, X dig / enter / talk, Z + L soap bubble, Z + R sneak (Z = RB). " +
                                "Also in F10 > Controller."));
         return wrap;
+    }
+
+    void RefreshGamepads()
+    {
+        var pads = gamepads.Connected;
+        padStatus.Text = !gamepads.Available ? "Controller detection is not available (SDL3.dll missing from the game folder)."
+            : pads.Count == 0 ? "No controller connected."
+            : "Connected: " + string.Join(", ", pads.Select(p => $"{p.Name} ({Gamepads.Describe(p.Kind)})"));
+        // An Xbox pad and no layout chosen yet (key absent): ask once per launcher start.
+        var xbox = pads.FirstOrDefault(p => p.Kind == Gamepads.Kind.Xbox);
+        if (xbox == null || askedLayout || new GameConfig(configPath).Get("controller", "layout") != null) return;
+        askedLayout = true;
+        bool? original = AskXboxLayout(xbox.Name);
+        if (original == null) return;
+        var c = new GameConfig(configPath);
+        c.SetString("controller", "layout", original.Value ? "xbox_original" : "gamecube");
+        c.Save();
+        layoutBox.SelectedIndex = original.Value ? 1 : 0;
+    }
+
+    // true = original Xbox layout, false = GameCube layout, null = closed without choosing (asked again next start).
+    bool? AskXboxLayout(string padName)
+    {
+        if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
+        using var dialog = new Form
+        {
+            Text = "Xbox controller detected", FormBorderStyle = FormBorderStyle.FixedDialog, MaximizeBox = false, MinimizeBox = false,
+            StartPosition = FormStartPosition.CenterParent, ShowInTaskbar = false, BackColor = Paper, Font = Font,
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, Padding = S(16, 12, 16, 12), Icon = Icon,
+        };
+        var body = new FlowLayoutPanel { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false, BackColor = Paper };
+        body.Controls.Add(new Label { Text = "Play with the original Xbox controls?", AutoSize = true, ForeColor = Ink, Font = new Font("Segoe UI", 13f, FontStyle.Bold) });
+        body.Controls.Add(Note($"{padName} is connected. Night of 100 Frights came out on the Xbox too, with its own button layout.", 520));
+        body.Controls.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk, LT gum, RT run, LB soap bubble, RB sneak. " +
+                               "The bumpers work together with the triggers, like on the Xbox.", 520));
+        body.Controls.Add(Note("GameCube: B head smash, X dig / enter / talk, RB (Z) + a trigger for soap bubble and sneak.", 520));
+        body.Controls.Add(Note("You can change this any time on the Controls page or in the game (F10).", 520));
+        var row = new FlowLayoutPanel { AutoSize = true, BackColor = Paper, Margin = S(0, 8, 0, 0) };
+        bool? answer = null;
+        row.Controls.Add(Btn("Original Xbox layout", (_, _) => { answer = true; dialog.Close(); }, Orange));
+        row.Controls.Add(Btn("GameCube layout", (_, _) => { answer = false; dialog.Close(); }, Paper));
+        body.Controls.Add(row);
+        dialog.Controls.Add(body);
+        dialog.ShowDialog(this);
+        return answer;
     }
 
     // ----- Mods -----

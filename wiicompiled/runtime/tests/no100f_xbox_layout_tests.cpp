@@ -1,3 +1,4 @@
+#include "hle/no100f_pad_actions.h"
 #include "hle/no100f_xbox_layout.h"
 #include "hle/no100f_xbox_text.h"
 
@@ -71,15 +72,37 @@ int main() {
         Require(Filter(open, 0, false, false, false) == 0, "released");
         Require(Filter(open, kB, false, false, false) == kX, "pressed again: talk");
 
-        // Black = Z + R (sneak), White = Z + L (soap bubble); the other shoulder is dropped, so gum / run can't turn
-        // into the other Z action.
+        // The bumpers are only recorded (the pad update adds them as actions); nothing else changes.
         PortState shoulders;
-        Require(Filter(shoulders, 0, false, true, false) == (kZ | kR), "Black");
-        Require(Filter(shoulders, kL, false, true, false) == (kZ | kR), "Black + gum: sneak only");
-        Require(Filter(shoulders, 0, false, false, true) == (kZ | kL), "White");
-        Require(Filter(shoulders, kR, false, false, true) == (kZ | kL), "White + run: bubble only");
-        Require(Filter(shoulders, 0, false, true, true) == (kZ | kL | kR), "both");
-        Require(Filter(shoulders, kL | kR, false, false, false) == (kL | kR), "gum + run without the bumpers");
+        Require(Filter(shoulders, kL | kR, false, true, true) == (kL | kR), "gum + run with both bumpers");
+        Require(shoulders.black && shoulders.white, "bumpers recorded");
+        Require(Filter(shoulders, 0, false, false, false) == 0 && !shoulders.black && !shoulders.white, "released");
+
+        // The game's pad update (0x8000F5E8), as disassembled.
+        namespace P = No100fPadActions;
+        Require(P::FromPad(0, 0, 0) == 0, "nothing");
+        Require(P::FromPad(P::kPadLeft | P::kPadRight | P::kPadDown | P::kPadUp, 0, 0) ==
+                (P::kLeft | P::kRight | P::kDown | P::kUp), "D-pad");
+        Require(P::FromPad(P::kPadA, 0, 0) == 0x10000 && P::FromPad(P::kPadB, 0, 0) == 0x80000 &&
+                P::FromPad(P::kPadX, 0, 0) == 0x20000 && P::FromPad(P::kPadY, 0, 0) == 0x40000 &&
+                P::FromPad(P::kPadStart, 0, 0) == 0x1, "face buttons and Start");
+        Require(P::FromPad(P::kPadL, 0, 0) == P::kGum && P::FromPad(P::kPadR, 0, 0) == P::kRun, "L gum, R run");
+        Require(P::FromPad(0, 0x17, 0x17) == 0, "analog triggers below 0x18");
+        Require(P::FromPad(0, 0x18, 0x18) == (P::kGum | P::kRun), "analog triggers at 0x18");
+        Require(P::FromPad(P::kPadZ, 0, 0) == P::kZ, "Z alone");
+        Require(P::FromPad(P::kPadZ | P::kPadL, 0, 0) == (P::kBubble | P::kZ), "Z + L soap bubble");
+        Require(P::FromPad(P::kPadZ | P::kPadR, 0, 0) == (P::kSneak | P::kZ), "Z + R sneak");
+        Require(P::FromPad(P::kPadZ, 0x18, 0x18) == (P::kBubble | P::kSneak | P::kZ), "Z + analog triggers");
+        // Black / White on top of the triggers: what GC Z can't do.
+        Require(P::AddXboxActions(P::FromPad(P::kPadR, 0, 0), true, false) == (P::kRun | P::kSneak | P::kZ),
+                "run + sneak");
+        Require(P::AddXboxActions(P::FromPad(P::kPadL, 0, 0), false, true) == (P::kGum | P::kBubble | P::kZ),
+                "gum + bubble");
+        Require(P::AddXboxActions(P::kA, false, false) == P::kA, "no bumpers: unchanged");
+        // Sticks: clamp to +-40, times 3.2 in single precision, clamp to +-127, truncate.
+        Require(P::Stick(0) == 0 && P::Stick(1) == 3 && P::Stick(5) == 16 && P::Stick(-5) == -16, "small values");
+        Require(P::Stick(39) == 124 && P::Stick(40) == 127 && P::Stick(127) == 127, "clamped high");
+        Require(P::Stick(-39) == -124 && P::Stick(-128) == -127, "clamped low");
 
         // Tutorial hints (texts as on the disc).
         using No100fXboxText::Rewrite;
@@ -115,18 +138,6 @@ int main() {
         std::string longText(0x7B, 'x');
         longText.replace(0, 12, "the R Button");
         Require(No100fXboxText::FindPatches(MakeHip(longText).data(), 0x180).empty(), "must fit the asset");
-        uint8_t left = 200, right = 200;
-        PortState black{false, 0, true, false};
-        MuteTriggers(black, left, right);
-        Require(left == 0 && right == 200, "Black mutes the left trigger");
-        left = 200;
-        PortState white{false, 0, false, true};
-        MuteTriggers(white, left, right);
-        Require(left == 200 && right == 0, "White mutes the right trigger");
-        right = 200;
-        PortState none;
-        MuteTriggers(none, left, right);
-        Require(left == 200 && right == 200, "no bumper: triggers unchanged");
     } catch (const std::exception& error) {
         std::cerr << "no100f_xbox_layout_tests: " << error.what() << '\n';
         return 1;

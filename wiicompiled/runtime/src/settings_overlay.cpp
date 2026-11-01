@@ -789,7 +789,8 @@ void DrawControllerSettings() {
         RuntimeConfigFile::SetXboxOriginalLayout(xboxLayout);
     }
     ImGui::TextDisabled("On: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display,");
-    ImGui::TextDisabled("LT gum, RT run, LB soap bubble (Xbox White), RB sneak (Xbox Black), Start pause. Hints say so too");
+    ImGui::TextDisabled("LT gum, RT run, LB soap bubble (Xbox White), RB sneak (Xbox Black), Start pause; the bumpers");
+    ImGui::TextDisabled("work together with the triggers. Hints say so too");
     ImGui::TextDisabled("from the next level load. Off (GameCube): B head smash and back, X dig, Z + L bubble, Z + R sneak.");
     ImGui::TextDisabled("Gamepads only; the button mapping below stays in GameCube buttons either way.");
     ImGui::Separator();

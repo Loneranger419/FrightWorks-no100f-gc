@@ -1,6 +1,7 @@
 #include "hle_stubs.h"
 #include "memory.h"
 #include "hle/controller_status_contract.h"
+#include "hle/no100f_pad_actions.h"
 #include "hle/no100f_xbox_layout.h"
 #include "input_bindings.h"
 #include "wii_remote_input.h"
@@ -114,6 +115,15 @@ extern "C" void PAD_HLE_SetRumbleEnabled(bool enabled)
     g_rumbleEnabled.store(enabled, std::memory_order_relaxed);
 }
 
+void No100fPad::XboxButtons(uint32_t port, bool& black, bool& white)
+{
+    black = white = false;
+    if (port < g_xboxPorts.size()) {
+        black = g_xboxPorts[port].black;
+        white = g_xboxPorts[port].white;
+    }
+}
+
 extern "C" uint32_t PAD__Init_HLE()
 {
     return PADInit() ? 1u : 0u;
@@ -167,11 +177,6 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     }
     aurora_set_button_icon_style(family >= 0 && xboxLayout && !g_xboxMenu ? family + 3 : family);
     FillTriggersHeldByButtons(statuses);
-    if (xboxLayout) {
-        for (uint32_t port = 0; port < PAD_CHANMAX; ++port) {
-            No100fXboxLayout::MuteTriggers(g_xboxPorts[port], statuses[port].triggerLeft, statuses[port].triggerRight);
-        }
-    }
     InputBindings::Apply(statuses);
     if (uint16_t scripted = 0; WiiRemoteInput::ScriptedPadButtons(scripted)) {
         statuses[0].err = PAD_ERR_NONE;

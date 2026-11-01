@@ -7,7 +7,8 @@
 //   GameCube: A jump, B head smash + menu back, X dig/enter/talk, Y display, L gum, R run, Z+L bubble, Z+R sneak.
 //   Xbox:     A jump, X head smash, B dig/enter/talk + menu back, Y display, LT gum, RT run, White bubble, Black sneak.
 // With the default mapping (B east, X west, Z right bumper) that means: swap GC B/X outside the menus, drop Z, and
-// turn the bumpers into the Xbox's White (left) and Black (right) buttons, sent to the game as GC Z+L / Z+R.
+// turn the bumpers into the Xbox's White (left) and Black (right) buttons. Those reach the game as actions of their
+// own (hle/no100f_pad_actions.h, the pad update override), so they work together with the triggers.
 // Based on the Xbox layout BitsofBitsofBitsofBits wrote for FrightWorks PR #12.
 namespace No100fXboxLayout {
 
@@ -34,7 +35,7 @@ struct PortState {
 };
 
 // `gamepad`: the GC buttons from this controller's mapping (keyboard input is added later, unchanged).
-// `black` / `white`: right / left bumper held.
+// `black` / `white`: right / left bumper held, kept for the pad update (No100fPad::XboxButtons).
 inline uint16_t Filter(PortState& state, uint16_t gamepad, bool menu, bool black, bool white) {
     uint16_t out = static_cast<uint16_t>(gamepad & ~kZ);
     if (!menu) out = SwapBX(out);
@@ -45,20 +46,9 @@ inline uint16_t Filter(PortState& state, uint16_t gamepad, bool menu, bool black
     }
     state.suppressed &= out;
     out = static_cast<uint16_t>(out & ~state.suppressed);
-    // With Z held the game reads L as soap bubble and R as sneak, so drop the other shoulder's gum / run.
-    if (black) out |= kZ | kR;
-    if (white) out |= kZ | kL;
-    if (black && !white) out = static_cast<uint16_t>(out & ~kL);
-    if (white && !black) out = static_cast<uint16_t>(out & ~kR);
     state.black = black;
     state.white = white;
     return out;
-}
-
-// The analog triggers count as L / R too (past 0x18), so Black / White also mute the other trigger.
-inline void MuteTriggers(const PortState& state, uint8_t& left, uint8_t& right) {
-    if (state.black && !state.white) left = 0;
-    if (state.white && !state.black) right = 0;
 }
 
 } // namespace No100fXboxLayout
