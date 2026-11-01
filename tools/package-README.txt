@@ -9,7 +9,8 @@ Needs your own GameCube disc image: USA v1.01 (GIHE78, revision 1), .iso/.gcm/.c
 2. Choose your disc image on the Play page, then press PLAY.
 
 Display page: resolution, widescreen, 60 fps, anti-aliasing, HD textures, skip intro.
-In game: F10 = settings, F11 = fullscreen / window. Gamepads work right away.
+In game: F10 = settings, F11 = fullscreen / window, F2 = screenshot (saved in the Screenshots folder),
+F1 = project page in your browser. Gamepads work right away.
 Keyboard: WASD move, arrows camera, Space A, Left Shift B, R X, F Y, C Z, Q/E L/R, Enter Start, IJKL D-pad.
 
 Saves, settings and mods are in data\UserData. To update, unzip the new release over this folder.

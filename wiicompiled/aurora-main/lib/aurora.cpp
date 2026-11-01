@@ -51,6 +51,8 @@ namespace aurora::gx {
 // declared here so the C entry point at the bottom of this file can forward to it.
 void report_producer_paced(bool paced) noexcept;
 } // namespace aurora::gx
+// Screenshot PNG writer, defined in lib/gfx/png_io.cpp.
+extern "C" bool aurora_write_png_rgb(const char* path, const uint8_t* rgb, uint32_t width, uint32_t height);
 #endif
 
 namespace aurora {
@@ -70,7 +72,13 @@ namespace {
 Module Log("aurora");
 
 std::atomic<uint32_t> g_captureFrame{UINT32_MAX};
+// g_captureFrame value for "the next presented frame" (screenshots).
+constexpr uint32_t kCaptureNextFrame = UINT32_MAX - 1;
+std::mutex g_captureMutex;  // guards the two below
 std::string g_captureOutputPath;
+bool g_captureScreenshot = false;  // PNG on a worker thread, result in g_screenshotResult
+// 0 = nothing new, 1 = saved, -1 = failed; read and cleared by aurora_take_screenshot_result.
+std::atomic<int> g_screenshotResult{0};
 
 using PresentClock = std::chrono::steady_clock;
 
@@ -504,21 +512,31 @@ struct PendingFrameCapture {
   uint32_t bytesPerRow = 0;
   uint64_t bufferSize = 0;
   bool bgra = false;
+  bool screenshot = false;
   std::string path;
 };
 
 std::optional<PendingFrameCapture> encode_frame_capture(const wgpu::CommandEncoder& encoder,
                                                         const webgpu::PresentSource& source) {
-  const uint32_t requestedFrame = g_captureFrame.load(std::memory_order_acquire);
+  uint32_t requestedFrame = g_captureFrame.load(std::memory_order_acquire);
   const uint32_t currentFrame = gfx::current_frame();
+  if (requestedFrame == kCaptureNextFrame) requestedFrame = currentFrame;
   if (requestedFrame == UINT32_MAX || currentFrame < requestedFrame) return std::nullopt;
   g_captureFrame.store(UINT32_MAX, std::memory_order_release);
+  std::string path;
+  bool screenshot = false;
+  {
+    std::lock_guard lock(g_captureMutex);
+    path = g_captureOutputPath;
+    screenshot = g_captureScreenshot;
+  }
   if (currentFrame != requestedFrame) {
     Log.error("Missed requested frame capture {} (current frame {})", requestedFrame, currentFrame);
     return std::nullopt;
   }
   if (!source.texture || source.size.width == 0 || source.size.height == 0) {
     Log.error("Frame {} capture has no present-source texture", currentFrame);
+    if (screenshot) g_screenshotResult.store(-1, std::memory_order_release);
     return std::nullopt;
   }
   const bool bgra = source.format == wgpu::TextureFormat::BGRA8Unorm ||
@@ -528,6 +546,7 @@ std::optional<PendingFrameCapture> encode_frame_capture(const wgpu::CommandEncod
   if (!bgra && !rgba) {
     Log.error("Frame {} capture does not support texture format {}", currentFrame,
               magic_enum::enum_name(source.format));
+    if (screenshot) g_screenshotResult.store(-1, std::memory_order_release);
     return std::nullopt;
   }
   const uint32_t bytesPerRow = align_to(source.size.width * 4, 256);
@@ -556,7 +575,8 @@ std::optional<PendingFrameCapture> encode_frame_capture(const wgpu::CommandEncod
       .bytesPerRow = bytesPerRow,
       .bufferSize = bufferSize,
       .bgra = bgra,
-      .path = g_captureOutputPath,
+      .screenshot = screenshot,
+      .path = std::move(path),
   };
 }
 
@@ -573,9 +593,35 @@ void complete_frame_capture(PendingFrameCapture& capture) {
   if (waitStatus != wgpu::WaitStatus::Success || mapStatus != wgpu::MapAsyncStatus::Success) {
     Log.error("Frame capture readback failed wait={} map={} message={}", magic_enum::enum_name(waitStatus),
               magic_enum::enum_name(mapStatus), mapMessage);
+    if (capture.screenshot) g_screenshotResult.store(-1, std::memory_order_release);
     return;
   }
   const auto* pixels = static_cast<const uint8_t*>(capture.buffer.GetConstMappedRange(0, capture.bufferSize));
+  if (capture.screenshot) {
+    // Copy out as opaque RGB and encode the PNG off the presentation thread.
+    std::vector<uint8_t> rgb(static_cast<size_t>(capture.width) * capture.height * 3);
+    const int r = capture.bgra ? 2 : 0, b = capture.bgra ? 0 : 2;
+    for (uint32_t y = 0; y < capture.height; ++y) {
+      const uint8_t* src = pixels + static_cast<size_t>(y) * capture.bytesPerRow;
+      uint8_t* dst = rgb.data() + static_cast<size_t>(y) * capture.width * 3;
+      for (uint32_t x = 0; x < capture.width; ++x, src += 4, dst += 3) {
+        dst[0] = src[r];
+        dst[1] = src[1];
+        dst[2] = src[b];
+      }
+    }
+    capture.buffer.Unmap();
+    std::thread([rgb = std::move(rgb), path = capture.path, width = capture.width, height = capture.height] {
+      const bool ok = aurora_write_png_rgb(path.c_str(), rgb.data(), width, height);
+      if (ok) {
+        Log.info("Screenshot saved to '{}' ({}x{})", path, width, height);
+      } else {
+        Log.error("Failed to write screenshot '{}'", path);
+      }
+      g_screenshotResult.store(ok ? 1 : -1, std::memory_order_release);
+    }).detach();
+    return;
+  }
   if (write_bmp(capture.path.c_str(), pixels, capture.width, capture.height, capture.bytesPerRow, capture.bgra)) {
     Log.info("Captured rendered frame to '{}' ({}x{})", capture.path, capture.width, capture.height);
   } else {
@@ -2088,8 +2134,24 @@ uint32_t aurora_get_frame_interpolation_fps() {
 #endif
 }
 void aurora_request_frame_capture(uint32_t frame, const char* outputPath) {
-  aurora::g_captureOutputPath = outputPath != nullptr ? outputPath : "frame_capture.bmp";
+  {
+    std::lock_guard lock(aurora::g_captureMutex);
+    aurora::g_captureOutputPath = outputPath != nullptr ? outputPath : "frame_capture.bmp";
+    aurora::g_captureScreenshot = false;
+  }
   aurora::g_captureFrame.store(frame, std::memory_order_release);
+}
+void aurora_request_screenshot(const char* outputPath) {
+  if (outputPath == nullptr) return;
+  {
+    std::lock_guard lock(aurora::g_captureMutex);
+    aurora::g_captureOutputPath = outputPath;
+    aurora::g_captureScreenshot = true;
+  }
+  aurora::g_captureFrame.store(aurora::kCaptureNextFrame, std::memory_order_release);
+}
+int aurora_take_screenshot_result() {
+  return aurora::g_screenshotResult.exchange(0, std::memory_order_acq_rel);
 }
 bool aurora_flush_efb_copies_to_ram() {
 #ifdef AURORA_ENABLE_GX
