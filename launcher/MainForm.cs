@@ -9,7 +9,7 @@ namespace ScoobyReMasked;
 // data\UserData\Config.toml, the keys the game's F10 menu uses. All art is drawn here; nothing from the game is shipped.
 sealed class MainForm : Form
 {
-    const string GameExe = "Scooby-Doo Refrightened.exe", AppTitle = "FrightWorks: Night of 100 Frights";
+    internal const string GameExe = "FrightWorks Game.exe", AppTitle = "FrightWorks: Night of 100 Frights";
     static Color Hex(string s) => ColorTranslator.FromHtml(s);
     // The game's palette: the logo's purple with its orange-tan rim, Mystic Manor's green sky and amber windows.
     static readonly Color Cream = Hex("#ECEFE4"), Paper = Hex("#FBFCF8"), Ink = Hex("#1F1830"), Teal = Hex("#5E3C91"),
@@ -110,7 +110,7 @@ sealed class MainForm : Form
     }
 
     // The game folder: data\ beside the launcher (release), or Play\ above launcher\publish (dev tree).
-    static (string root, string game) FindGame()
+    internal static (string root, string game) FindGame()
     {
         for (var d = new DirectoryInfo(AppContext.BaseDirectory); d != null; d = d.Parent)
             foreach (var sub in new[] { "data", "Play" })
@@ -360,7 +360,7 @@ sealed class MainForm : Form
             "FrightWorks: Night of 100 Frights runs your own copy of Scooby-Doo! Night of 100 Frights for the GameCube (USA, GIHE78, version 1.01). " +
             "Dump the disc you own (for example with CleanRip on a Wii) as a plain .iso or .ciso, then choose it above. " +
             "The launcher copies the game files into the Disc folder once; the image file isn't needed afterwards."));
-        body.Controls.Add(Note("In the game, F10 opens the settings menu (resolution, picture shape, controls, audio) and F11 switches between fullscreen and a window."));
+        body.Controls.Add(Note("In the game, F10 opens the settings menu (resolution, picture shape, controls, audio), F11 switches between fullscreen and a window, and F2 saves a screenshot to the Screenshots folder."));
         body.Controls.Add(BuildHolidayRow());
         // Scooby's tips: click the bubble for another one.
         var tipRow = new FlowLayoutPanel { AutoSize = true, Margin = S(0, 10, 0, 6) };
@@ -428,6 +428,7 @@ sealed class MainForm : Form
     {
         "Press F10 in the game to change resolution, picture shape or controls without quitting.",
         "F11 flips the game between fullscreen and a window.",
+        "F2 in the game saves a screenshot to the Screenshots folder, next to this launcher.",
         "Cinematic 2.39:1 shows far more of Mystic Manor than the GameCube ever could.",
         "Any gamepad works as a GameCube controller right away.",
         "Got an HDR screen? Switch HDR on in Windows, then on the Display page.",
@@ -549,7 +550,7 @@ sealed class MainForm : Form
         Row("HDR highlights", "hdr_peak_nits", new[] { ("Subtle (400 nits)", "400.0"), ("Standard (1000 nits)", "1000.0"), ("Strong (1500 nits)", "1500.0") }, "1000.0");
         body.Controls.Add(table);
         body.Controls.Add(Note("Changes are saved at once and apply the next time the game starts. In the game, F10 opens the same " +
-                               "settings and F11 switches between fullscreen and a window."));
+                               "settings, F11 switches between fullscreen and a window, and F2 saves a screenshot to the Screenshots folder."));
         return card;
     }
 

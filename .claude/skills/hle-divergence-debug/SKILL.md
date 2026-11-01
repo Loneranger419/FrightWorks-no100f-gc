@@ -37,7 +37,7 @@ git apply tools\debug\patches\dltail-diagnostic.patch
 powershell -ExecutionPolicy Bypass -File tools\build-no100f.ps1 -SkipTools -SkipTranslate
 # RT_LOGF goes to stderr; manual-session does not capture it, so launch directly after one manual-session start (writes Config/boot):
 $env:NO100F_DLTAIL = '1'
-Start-Process 'Play\Scooby-Doo Refrightened.exe' -WorkingDirectory Play -RedirectStandardError autotest\manual\dltail.log -RedirectStandardOutput autotest\manual\dltail.out.log
+Start-Process 'Play\FrightWorks Game.exe' -WorkingDirectory Play -RedirectStandardError autotest\manual\dltail.log -RedirectStandardOutput autotest\manual\dltail.out.log
 Select-String autotest\manual\dltail.log -Pattern '\[dltail\]' -Context 0,2
 git apply -R tools\debug\patches\dltail-diagnostic.patch   # remove before any PR
 ```

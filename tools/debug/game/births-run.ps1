@@ -8,9 +8,9 @@ $root = Resolve-Path "$PSScriptRoot\..\..\.."
 Set-Location $root
 $out = Join-Path $root 'autotest\manual\births'
 New-Item -ItemType Directory -Force $out | Out-Null
-$exe = Join-Path $root 'Play\Scooby-Doo Refrightened.exe'
+$exe = Join-Path $root 'Play\FrightWorks Game.exe'
 $cfg = Join-Path $root 'Play\UserData\Config.toml'
-function Stop-Game { Stop-Process -Name 'Scooby-Doo Refrightened' -ErrorAction SilentlyContinue; Start-Sleep 1 }
+function Stop-Game { Stop-Process -Name 'FrightWorks Game' -ErrorAction SilentlyContinue; Start-Sleep 1 }
 try {
   foreach ($lvl in $Levels) {
     Stop-Game

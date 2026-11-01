@@ -5,16 +5,16 @@
     <UseWindowsForms>true</UseWindowsForms>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>Scooby-Doo Refrightened Launcher</AssemblyName>
+    <AssemblyName>FrightWorks</AssemblyName>
     <RootNamespace>ScoobyReMasked</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
-    <Version>1.0.2</Version>
+    <Version>1.0.3</Version>
     <Product>FrightWorks: Night of 100 Frights</Product>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <InvariantGlobalization>true</InvariantGlobalization>
     <DebugType>embedded</DebugType>
-    <ApplicationIcon>refrightened.ico</ApplicationIcon>
+    <ApplicationIcon>frightworks.ico</ApplicationIcon>
   </PropertyGroup>
   <ItemGroup>
     <EmbeddedResource Include="art\header.jpg" LogicalName="ScoobyReMasked.header.jpg" />

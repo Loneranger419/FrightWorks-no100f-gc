@@ -1,6 +1,7 @@
 # Debug kit
 
-Tools and Claude Code skills for finding bugs in the FrightWorks static recomp. Only things that helped in a real
+Tools and Claude Code skills for finding bugs in the FrightWorks static recomp. New here? Start with the walkthrough in
+[`docs/testing.md`](../../docs/testing.md); this page is the reference. Only things that helped in a real
 investigation (upstream PRs #8, #10–#15, #22, issue #24) or will help the next one. The build tools (`tools\build-no100f.ps1`,
 `shot-pid.ps1`, ...) live one folder up; nothing here contains game data.
 

@@ -44,7 +44,7 @@ powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 start -B
 powershell -ExecutionPolicy Bypass -File tools\debug\manual-session.ps1 stop
 python tools\debug\game\mkhip.py i004 --spot spot1            # spawn there, all NPCs moved off-map (--npc none keeps them)
 #   or: mkhip.py i004 --pos X Y Z --yaw R
-Start-Process 'Play\Scooby-Doo Refrightened.exe' -WorkingDirectory Play   # not manual-session start: it rewrites zz-manual
+Start-Process 'Play\FrightWorks Game.exe' -WorkingDirectory Play   # not manual-session start: it rewrites zz-manual
 ```
 
 - Spots: with `postool.patch` built in, **F9** (global hotkey) appends Scooby's position + yaw to `Play/postool/spots.txt`
@@ -63,9 +63,12 @@ and takes the patch out of the source when the game closes (`-SkipTranslate` onl
 so a bug seen in the release but not in a dev build may be an HD texture: retry with `-HdTextures`.
 
 **F8** in game: current scene + Scooby's position, go to any scene (start position), save/delete spots and go to them
-(another scene loads first), god mode (no damage, green Scooby), Monsters tab (all off in every scene, or one
+(another scene loads first; one transfer at a time, queued until in play with no cutscene, Cancel travel, 60 s
+timeout; travel turns the free camera off), Skip button (presses the game's own A in a recorded cutscene, Start on the
+title intro / attract demo, for up to 10 s), god mode (no damage, green Scooby), Levels tab, Monsters tab (all off in every level, or one
 by one in this scene). Spots: `UserData/devmenu_spots.txt` (`I004 x y z yawRad name`). Scriptable through
-`Play/devmenu.txt` (every 30 frames while in play, then deleted; results in `Play/devmenu.log`): `scene ID`, `spot NAME`,
+`Play/devmenu.txt` (every 30 frames, then deleted; results in `Play/devmenu.log`; the file is left alone until in play with
+no scene/spot transfer pending, unless all its lines are `skip` or, with nothing pending, `scene`): `scene ID`, `skip`, `spot NAME`,
 `save NAME`, `tp X Y Z [YAWDEG]`, `where`, `peek ADDR [N]`, `frame`, `god on|off`, `monsters [on|off]` (list / all),
 `monster N|NAME on|off`, `ents` (scene entity list), `textures`. Doesn't touch warp flags or the save file.
 `cutout N` (cut-out draw mode, needs aurora's `AURORA_HAS_CUTOUT_MODE`; F7 cycles), `perf` (draw calls + present
@@ -80,7 +83,8 @@ scripts: `Play/devmenu_press.txt`, read every 30 frames even outside play, lines
 while `cutscene yes`, then waits for `control yes`.
 
 Textures tab (for HD pack audits): reads `UserData/devmenu_textures.txt` (tab-separated `id file severity asset scenes level`,
-`#` comments) and lists those replacement textures per scene, each marked "drawn" once the game has used it since start
+optional seventh column starting with `effect`, any case = Effects tab instead; `#` comments; the Reload button re-reads
+it; each tab keeps its own "This level only" / "Hide fine" filters) and lists those replacement textures per scene, each marked "drawn" once the game has used it since start
 (aurora `aurora_texture_replacement_used(name)`, added by the patch: names are recorded when a replacement is looked up).
 Each row can save a spot named after the ID or go to it; suspects whose scenes include `boot` count in every scene.
 Find (row button or `find <id>`) draws that replacement solid magenta and writes each distinct GX state it is drawn with to

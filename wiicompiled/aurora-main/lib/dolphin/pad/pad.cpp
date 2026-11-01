@@ -220,7 +220,7 @@ std::array<PADButtonMapping, PAD_BUTTON_COUNT> g_defaultButtonsWiiUPro{{
     {SDL_GAMEPAD_BUTTON_DPAD_RIGHT, PAD_BUTTON_RIGHT},
 }};
 
-// Scooby-Doo: Re-Masked keyboard defaults (port 1; F10 bindings saved in keyboard_bindings.dat override them):
+// FrightWorks keyboard defaults (port 1; F10 bindings saved in keyboard_bindings.dat override them):
 // WASD stick, arrows C-stick, Space A, Left Shift B, R X, F Y, C Z, Q/E L/R, Enter Start, I/J/K/L D-pad.
 std::array<PADKeyButtonBinding, PAD_BUTTON_COUNT> g_defaultKeys{{
     {SDL_SCANCODE_SPACE, PAD_BUTTON_A},

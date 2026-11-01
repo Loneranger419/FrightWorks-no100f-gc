@@ -174,6 +174,11 @@ void aurora_set_present_schedule(uint64_t baseNanos, uint64_t intervalNanos);
 // slot group from this, backing off after misses. Only paced presents may report.
 void aurora_report_producer_paced(bool paced);
 void aurora_request_frame_capture(uint32_t frame, const char* outputPath);
+// Saves the next presented game frame (without the ImGui overlay) as a PNG at outputPath (UTF-8),
+// encoded on a worker thread. Replaces a capture still waiting for its frame.
+void aurora_request_screenshot(const char* outputPath);
+// Outcome of the last screenshot: 1 saved, -1 failed, 0 nothing new. Reading it clears it.
+int aurora_take_screenshot_result(void);
 bool aurora_flush_efb_copies_to_ram();
 bool aurora_flush_efb_copy_to_ram(void* dest);
 

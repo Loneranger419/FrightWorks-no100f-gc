@@ -4,7 +4,7 @@
 # functions are compiled once into mkw_base_shared; only callers whose direct
 # ABI differs between profiles receive small base/RR variants.
 
-# Scooby-Doo: Re-Masked ships no game data: the translator's data_sections_init.cpp and its blobs are not compiled;
+# FrightWorks ships no game data: the translator's data_sections_init.cpp and its blobs are not compiled;
 # src/hle/scooby_dol_loader.cpp loads the sections from the player's disc instead.
 # Crash-report symbolization table emitted by generate-data-init. The stub
 # (deliberately outside the globbed src/ tree so it is never picked up twice)
