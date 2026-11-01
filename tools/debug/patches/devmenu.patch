@@ -428,6 +428,27 @@ index 955e2e0..17637b2 100644
  }
  
  static inline wgpu::BlendFactor to_blend_factor(GXBlendFactor fac, bool isDst, bool alphaComponent) {
+diff --git a/wiicompiled/runtime/CMakeLists.txt b/wiicompiled/runtime/CMakeLists.txt
+index a796d2e..19dfe36 100644
+--- a/wiicompiled/runtime/CMakeLists.txt
++++ b/wiicompiled/runtime/CMakeLists.txt
+@@ -429,6 +429,16 @@ target_include_directories(no100f_window_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR
+ target_compile_features(no100f_window_tests PRIVATE cxx_std_17)
+ add_test(NAME no100f_window_tests COMMAND no100f_window_tests)
+ 
++add_executable(no100f_devmenu_state_tests "${CMAKE_CURRENT_LIST_DIR}/tests/no100f_devmenu_state_tests.cpp")
++target_include_directories(no100f_devmenu_state_tests PRIVATE "${CMAKE_CURRENT_LIST_DIR}/include")
++target_compile_features(no100f_devmenu_state_tests PRIVATE cxx_std_17)
++if(MSVC)
++    target_compile_options(no100f_devmenu_state_tests PRIVATE /UNDEBUG)
++else()
++    target_compile_options(no100f_devmenu_state_tests PRIVATE -UNDEBUG)
++endif()
++add_test(NAME no100f_devmenu_state_tests COMMAND no100f_devmenu_state_tests)
++
+ # The input expression engine is self-contained, so it can be exercised without
+ # linking the runtime or SDL.
+ add_executable(mkw_input_expr_tests
 diff --git a/wiicompiled/runtime/include/no100f_devmenu.h b/wiicompiled/runtime/include/no100f_devmenu.h
 new file mode 100644
 index 0000000..6070339
@@ -456,6 +477,34 @@ index 0000000..6070339
 +// Pad 1 buttons (PAD_BUTTON_*) held by the "devmenu_press.txt" file command, ORed in by PADRead.
 +uint16_t PressedButtons() noexcept;
 +} // namespace no100f_devmenu
+diff --git a/wiicompiled/runtime/include/no100f_devmenu_state.h b/wiicompiled/runtime/include/no100f_devmenu_state.h
+new file mode 100644
+index 0000000..2ed6ff3
+--- /dev/null
++++ b/wiicompiled/runtime/include/no100f_devmenu_state.h
+@@ -0,0 +1,22 @@
++#pragma once
++
++// Dev-menu logic that needs no SDL, ImGui or guest memory, so it can be unit tested.
++
++#include <cctype>
++#include <string_view>
++
++namespace no100f_devmenu {
++
++// devmenu_textures.txt: the seventh column marks Effects-tab entries. Accept any case, leading spaces and suffixes
++// ("effect", " EFFECT\r", "effect:particle").
++inline bool IsEffectEntry(std::string_view category) {
++    while (!category.empty() && std::isspace(static_cast<unsigned char>(category.front())))
++        category.remove_prefix(1);
++    constexpr std::string_view prefix = "effect";
++    if (category.size() < prefix.size()) return false;
++    for (size_t i = 0; i < prefix.size(); ++i)
++        if (std::tolower(static_cast<unsigned char>(category[i])) != prefix[i]) return false;
++    return true;
++}
++
++} // namespace no100f_devmenu
 diff --git a/wiicompiled/runtime/src/hle/input/pad.cpp b/wiicompiled/runtime/src/hle/input/pad.cpp
 index c8ac957..b9f1b8c 100644
 --- a/wiicompiled/runtime/src/hle/input/pad.cpp
@@ -481,10 +530,10 @@ index c8ac957..b9f1b8c 100644
          statuses[0].button |= scripted;
 diff --git a/wiicompiled/runtime/src/no100f_devmenu.cpp b/wiicompiled/runtime/src/no100f_devmenu.cpp
 new file mode 100644
-index 0000000..1b8cc67
+index 0000000..4de8434
 --- /dev/null
 +++ b/wiicompiled/runtime/src/no100f_devmenu.cpp
-@@ -0,0 +1,1499 @@
+@@ -0,0 +1,1540 @@
 +// DEBUG dev menu (F8) for Scooby-Doo! Night of 100 Frights: teleport to any scene, save spots and go back to them,
 +// god mode, monsters off.
 +//
@@ -507,6 +556,7 @@ index 0000000..1b8cc67
 +//
 +// Everything runs on the game thread (settings_overlay::Draw is called from the GXCopyDisp HLE).
 +#include "no100f_devmenu.h"
++#include "no100f_devmenu_state.h"
 +
 +#include <aurora/aurora.h>
 +#include <aurora/gfx.h>
@@ -805,6 +855,7 @@ index 0000000..1b8cc67
 +    float x = 0, y = 0, z = 0, yaw = 0, pitch = 0;  // yaw 0 looks along +z, pitch > 0 looks down
 +};
 +FreeCam g_cam;
++uint32_t g_camScene = 0, g_camSceneId = 0;  // the scene the free camera belongs to
 +
 +void CamRows(const FreeCam& c, float rows[4][3]) {
 +    const float cp = std::cos(c.pitch), sp = std::sin(c.pitch), cy = std::cos(c.yaw), sy = std::sin(c.yaw);
@@ -847,6 +898,10 @@ index 0000000..1b8cc67
 +        return;
 +    }
 +    g_cam.on = on;
++    if (on) {
++        g_camScene = CurrentScenePtr();
++        g_camSceneId = CurrentSceneId();
++    }
 +    g_status = on ? "Free camera on" : "Free camera off";
 +}
 +
@@ -865,6 +920,8 @@ index 0000000..1b8cc67
 +void ApplySpotCam(const Spot& s) {
 +    if (!s.cam) return;
 +    g_cam = {true, s.cx, s.cy, s.cz, s.cyaw, s.cpitch};
++    g_camScene = CurrentScenePtr();
++    g_camSceneId = CurrentSceneId();
 +}
 +
 +// Pad: left stick move, right stick look, LT/RT down/up, hold A fast / B slow. Keyboard: WASD, Q/E down/up, arrows
@@ -1160,7 +1217,7 @@ index 0000000..1b8cc67
 +};
 +std::vector<Suspect> g_suspects;
 +bool g_suspectsLoaded = false;
-+bool g_suspectsThisScene = true;
++bool g_suspectsThisScene[2] = {true, true};  // Textures, Effects
 +std::string g_findId;  // suspect drawn solid magenta ("Find"), empty = none
 +
 +// Draws the suspect's replacement solid magenta (needs texture replacements on); nullptr = off.
@@ -1174,7 +1231,7 @@ index 0000000..1b8cc67
 +// verdict button sets fine/bugged/fixed for the current scene (a texture can be fine in one level and broken in
 +// another); tools/debug/texhunt/verdicts.py merges them into suspects.csv and adds "fixed" for textures fixed in the pack.
 +std::map<std::pair<std::string, std::string>, std::string> g_verdicts;  // (id, scene) -> status
-+bool g_hideFine = true;
++bool g_hideFine[2] = {true, true};  // Textures, Effects
 +
 +std::filesystem::path VerdictsPath() { return RuntimeConfigFile::ApplicationDataDirectory() / "devmenu_verdicts.txt"; }
 +
@@ -1242,7 +1299,7 @@ index 0000000..1b8cc67
 +        Suspect s{f[0], f[1], f[2], f[3], f[5], {}};
 +        std::istringstream sc(f[4]);
 +        for (std::string id; sc >> id;) s.scenes.push_back(IdFromString(id));
-+        s.effect = f.size() > 6 && f[6].rfind("effect", 0) == 0;
++        s.effect = f.size() > 6 && IsEffectEntry(f[6]);
 +        g_suspects.push_back(std::move(s));
 +    }
 +}
@@ -1676,6 +1733,14 @@ index 0000000..1b8cc67
 +
 +// Textures tab (effects = false) / Effects tab (effects = true: drawn at runtime, e.g. on a kill or a bonk).
 +void DrawTextures(bool effects) {
++    bool& thisScene = g_suspectsThisScene[effects ? 1 : 0];
++    bool& hideFine = g_hideFine[effects ? 1 : 0];
++    if (effects)
++        ImGui::TextWrapped("Textures drawn at runtime (bonks, pickups, particles). This is not a gameplay-effects toggle.");
++    if (ImGui::Button("Reload devmenu_textures.txt")) {
++        g_suspects.clear();
++        g_suspectsLoaded = false;
++    }
 +    LoadSuspects();
 +    LoadSpots();
 +    LoadLevels();
@@ -1685,34 +1750,50 @@ index 0000000..1b8cc67
 +    static const char* const kCutoutModes[] = {"Game (alpha > 0)", "Cut (HD: alpha > 127)", "Two-pass (HD)",
 +                                               "Two-pass (all textures)"};
 +    int cutout = aurora_get_cutout_mode();
-+    ImGui::SetNextItemWidth(220.0f);
-+    if (ImGui::Combo("Cut-outs (F7 cycles)", &cutout, kCutoutModes, 4)) aurora_set_cutout_mode(cutout);
++    if (!effects) {
++        ImGui::SetNextItemWidth(220.0f);
++        if (ImGui::Combo("Cut-outs (F7 cycles)", &cutout, kCutoutModes, 4)) aurora_set_cutout_mode(cutout);
++    }
 +#endif
 +    if (g_suspects.empty()) {
-+        ImGui::TextWrapped("No suspects: put devmenu_textures.txt in UserData (copy autotest\\texhunt\\devmenu_textures.txt).");
++        ImGui::TextWrapped("No list loaded: put devmenu_textures.txt in UserData (e.g. from autotest\\texhunt), then Reload. Effects entries have 'effect' in the seventh column.");
 +        return;
 +    }
-+    ImGui::Checkbox("This scene only", &g_suspectsThisScene);
++    ImGui::Checkbox("This scene only", &thisScene);
 +    ImGui::SameLine();
-+    ImGui::Checkbox("Hide fine/fixed", &g_hideFine);
++    ImGui::Checkbox("Hide fine/fixed", &hideFine);
 +    ImGui::SameLine();
 +    ImGui::TextDisabled("drawn = seen on screen in this level");
 +    const uint32_t cur = CurrentSceneId();
++    // boot.HIP textures are loaded for every scene
++    const auto isHere = [&](const Suspect& s) {
++        return std::find(s.scenes.begin(), s.scenes.end(), cur) != s.scenes.end() ||
++               std::find(s.scenes.begin(), s.scenes.end(), IdFromString("BOOT")) != s.scenes.end();
++    };
++    // "fine" = fine/fixed in this scene (this scene only) / in all its scenes (all scenes)
++    const auto isFine = [&](const Suspect& s) {
++        const auto [fineScenes, totalScenes] = FineCount(s);
++        return thisScene ? Done(Verdict(s.id, cur)) : totalScenes > 0 && fineScenes == totalScenes;
++    };
++    const auto shown = [&](const Suspect& s) {
++        return s.effect == effects && (!thisScene || isHere(s)) && !(hideFine && isFine(s) && !g_markedOpen.count(s.id));
++    };
++    if (std::none_of(g_suspects.begin(), g_suspects.end(), shown)) {
++        ImGui::TextWrapped("Nothing to show: untick 'This scene only' or 'Hide fine/fixed'.");
++        return;
++    }
 +    std::string lastLevel;
-+    if (!ImGui::BeginTable("suspects", 7, ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit)) return;
++    constexpr ImGuiTableFlags kTableFlags =
++        ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_ScrollX | ImGuiTableFlags_ScrollY;
++    if (!ImGui::BeginTable("suspects", 7, kTableFlags)) return;
 +    for (size_t i = 0; i < g_suspects.size(); ++i) {
 +        const Suspect& s = g_suspects[i];
-+        if (s.effect != effects) continue;
-+        // boot.HIP textures are loaded for every scene
-+        const bool here = std::find(s.scenes.begin(), s.scenes.end(), cur) != s.scenes.end() ||
-+                          std::find(s.scenes.begin(), s.scenes.end(), IdFromString("BOOT")) != s.scenes.end();
-+        if (g_suspectsThisScene && !here) continue;
-+        // "fine" = fine/fixed in this scene (this scene only) / in all its scenes (all scenes)
++        if (!shown(s)) continue;
++        const bool here = isHere(s);
 +        const std::string verdict = Verdict(s.id, cur);
 +        const auto [fineScenes, totalScenes] = FineCount(s);
-+        const bool fine = g_suspectsThisScene ? Done(verdict) : totalScenes > 0 && fineScenes == totalScenes;
-+        if (g_hideFine && fine && !g_markedOpen.count(s.id)) continue;
-+        if (!g_suspectsThisScene && s.level != lastLevel) {
++        const bool fine = isFine(s);
++        if (!thisScene && s.level != lastLevel) {
 +            lastLevel = s.level;
 +            ImGui::TableNextRow();
 +            ImGui::TableNextColumn();
@@ -1899,6 +1980,11 @@ index 0000000..1b8cc67
 +// RwCameraBeginUpdate replacement hook (see FreeCam): the main camera's frame gets the free camera pose.
 +void ApplyFreecam(uint32_t camera, CpuContext* ctx) {
 +    if (!g_cam.on || camera != Read32Or0(kMainCameraPtr)) return;
++    // A scene change (travel, a door, a warp) turns the free camera off: its pose belongs to the old scene.
++    if (CurrentScenePtr() != g_camScene || CurrentSceneId() != g_camSceneId) {
++        g_cam.on = false;
++        return;
++    }
 +    const uint32_t frame = MainCameraFrame();
 +    if (!frame) return;
 +    float rows[4][3];
@@ -1961,11 +2047,15 @@ index 0000000..1b8cc67
 +                ImGui::EndTabItem();
 +            }
 +            if (ImGui::BeginTabItem("Textures")) {
++                ImGui::PushID("textures");  // both tabs draw the same widgets: keep their IDs apart
 +                DrawTextures(false);
++                ImGui::PopID();
 +                ImGui::EndTabItem();
 +            }
 +            if (ImGui::BeginTabItem("Effects")) {
++                ImGui::PushID("effects");
 +                DrawTextures(true);
++                ImGui::PopID();
 +                ImGui::EndTabItem();
 +            }
 +            ImGui::EndTabBar();
@@ -1985,7 +2075,7 @@ index 0000000..1b8cc67
 +}
 +PPC_NATIVE_OVERRIDE_VOID(80168C78, No100f_DevmenuCameraBeginUpdate, (CpuContext* ctx), (ctx));
 diff --git a/wiicompiled/runtime/src/settings_overlay.cpp b/wiicompiled/runtime/src/settings_overlay.cpp
-index 67c4729..8d88814 100644
+index 81eb3ac..5b83a1b 100644
 --- a/wiicompiled/runtime/src/settings_overlay.cpp
 +++ b/wiicompiled/runtime/src/settings_overlay.cpp
 @@ -7,6 +7,7 @@ extern "C" uint8_t* aurora_load_png_rgba(const char* path, uint32_t* width, uint
@@ -1996,7 +2086,7 @@ index 67c4729..8d88814 100644
  #include "audio_backend.h"
  #include "aurora_events.h"
  #include "controller_button_names.h"
-@@ -1743,8 +1744,8 @@ bool IsMouseActivity(const SDL_Event& event) {
+@@ -1744,8 +1745,8 @@ bool IsMouseActivity(const SDL_Event& event) {
  // Runs on the thread that pumps SDL events (the same one that calls Draw), so
  // the SDL cursor calls are safe here.
  void UpdateCursorAutoHide() {
@@ -2007,7 +2097,7 @@ index 67c4729..8d88814 100644
      if (shouldHide == g_cursorHidden) {
          return;
      }
-@@ -1773,7 +1774,7 @@ void PersistDisplayModeIfChanged() {
+@@ -1774,7 +1775,7 @@ void PersistDisplayModeIfChanged() {
  
  void ApplyInputBlockState() {
      const bool blocked = controller_mapping_wizard::IsActive() || g_rebind.active ||
@@ -2016,7 +2106,7 @@ index 67c4729..8d88814 100644
      PADBlockInput(blocked);
      InputBindings::SetInputBlocked(blocked);
  }
-@@ -1826,6 +1827,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
+@@ -1827,6 +1828,7 @@ void HandleEvents(const AuroraEvent* events) noexcept {
              continue;
          }
          controller_mapping_wizard::HandleSdlEvent(ev->sdl);
@@ -2024,7 +2114,7 @@ index 67c4729..8d88814 100644
          if (g_rebind.active && (IsToggleKey(ev->sdl, SDL_SCANCODE_BACKSPACE) ||
                                  IsToggleKey(ev->sdl, SDL_SCANCODE_DELETE))) {
              CompleteRebind(g_rebind.kind == RebindKind::Controller ? PAD_NATIVE_BUTTON_DISABLED
-@@ -1963,6 +1965,7 @@ void Draw() noexcept {
+@@ -1964,6 +1966,7 @@ void Draw() noexcept {
      NetplayUi::Draw();
      DrawFpsOverlay();
      DrawTopBar();
@@ -2032,3 +2122,21 @@ index 67c4729..8d88814 100644
      DrawExitPrompt();
      controller_mapping_wizard::Draw();
      ApplyInputBlockState();
+diff --git a/wiicompiled/runtime/tests/no100f_devmenu_state_tests.cpp b/wiicompiled/runtime/tests/no100f_devmenu_state_tests.cpp
+new file mode 100644
+index 0000000..83abf03
+--- /dev/null
++++ b/wiicompiled/runtime/tests/no100f_devmenu_state_tests.cpp
+@@ -0,0 +1,12 @@
++#include "no100f_devmenu_state.h"
++
++#include <cassert>
++
++int main() {
++    assert(no100f_devmenu::IsEffectEntry("effect"));
++    assert(no100f_devmenu::IsEffectEntry(" EFFECT\r"));
++    assert(no100f_devmenu::IsEffectEntry("effect:particle"));
++    assert(!no100f_devmenu::IsEffectEntry(""));
++    assert(!no100f_devmenu::IsEffectEntry("eff"));
++    assert(!no100f_devmenu::IsEffectEntry("texture"));
++}
