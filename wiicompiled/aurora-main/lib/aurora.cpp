@@ -2263,6 +2263,28 @@ void aurora_set_button_icon_style(int style) {
   aurora::gfx::texture_replacement::set_button_icon_style(style);
 #endif
 }
+bool aurora_texture_replacement_used(const char* name) {
+#ifdef AURORA_ENABLE_GX
+  return aurora::gfx::texture_replacement::replacement_used(name);
+#else
+  return false;
+#endif
+}
+void aurora_texture_replacement_reset_used() {
+#ifdef AURORA_ENABLE_GX
+  aurora::gfx::texture_replacement::reset_used();
+#endif
+}
+void aurora_texture_replacement_highlight(const char* name) {
+#ifdef AURORA_ENABLE_GX
+  aurora::gfx::texture_replacement::set_highlight(name != nullptr ? name : "");
+#endif
+}
+void aurora_texture_log(const char* scene) {
+#ifdef AURORA_ENABLE_GX
+  aurora::gfx::texture_replacement::set_texture_log_scene(scene != nullptr ? scene : "");
+#endif
+}
 bool aurora_get_metalfx_spatial() { return aurora::g_metalfxRequested.load(); }
 bool aurora_is_metalfx_spatial_supported() { return aurora::g_metalfxSupported.load(); }
 AuroraMetalFXStatus aurora_get_metalfx_status() { return aurora::g_metalfxStatus.load(); }

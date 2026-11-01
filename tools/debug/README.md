@@ -30,7 +30,7 @@ Layout (paths in the skills and scripts are written from the repo root):
 
 | Path | What |
 | --- | --- |
-| `play-patched.ps1` | Apply patches (default `devmenu`: F8 dev menu), build, play; patches come out of the source when the game closes. `-Patch a,b`, `-HdTextures` (with the HD pack), `-Keep`, `-CleanBuild`, `-Remove` |
+| `play-patched.ps1` | Apply patches, build, play with the dev menu on (`NO100F_DEV_TOOLS=1`; the default `devmenu` patch only on branches from before it was built in); patches come out of the source when the game closes. `-Patch a,b`, `-HdTextures` (with the HD pack), `-Keep`, `-CleanBuild`, `-Remove` |
 | `manual-session.ps1` | Single-window playtest: `start -Boot <level> [-AllPowerups]` (writes Config + `zz-manual` boot mod), `shot`, `stop`, `stop-tests` |
 | `build-translator.ps1` | Rebuild the translator after switching to/from a branch that changes `wiicompiled\translator` (then build without `-SkipTranslate`) |
 | `dol.py` | `callers` / `func` / `dis` / `name` on `game/main.dol` with MAP names (needs `capstone`) |
@@ -56,7 +56,7 @@ setup when the game closes.
 | `hunt.ps1 [-Boot h001] [-Pack <dir>] [-Branch b] [-TexLog]` | Texture-hunt session: dev menu + HD pack, every powerup, no hub intro, audio dump checked for a stuck loop |
 | `spots-run.ps1 -Boot h001 -Ids a,b -Mode orig\|hd\|clean [-Tag x] [-Branch b]` | Screenshot each saved spot |
 | `cutout-shots.ps1`, `perf-cutout.ps1` | Shots / draw-call + frame-time numbers per cut-out mode (needs aurora's cut-out modes) |
-| `build-devmenu.ps1 -Branch b` | `Play\` = that branch + the dev menu patch, source put back afterwards |
+| `build-devmenu.ps1 -Branch b` | `Play\` = that branch with the dev menu (the patch on older branches), source put back afterwards |
 | `gxtex.py` | XXH64 + RWTX reader + GX decoders; names textures like the port (`tex1_WxH_<hash>_<fmt>`) |
 | `where.py [IDs]` | Which assets use a suspect's texture; BSP geometry gets `tp X Y Z` positions |
 | `tint-pack.py --out <dir> (--from <dir> \| --hip <HIP>) [--match s]` | Tinted copies of textures; link them with `look.ps1 -Extra` to see where a texture is drawn |

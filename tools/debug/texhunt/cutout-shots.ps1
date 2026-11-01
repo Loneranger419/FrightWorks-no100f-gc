@@ -7,6 +7,7 @@ param([Parameter(Mandatory)][string]$Label, [string]$Boot = 'h001', [string]$Spo
       [string]$Pack = '', [string]$Modes = '0,1,2,3', [int]$Interp = 0)
 if ($Spot -eq 'none') { $Spot = '' }  # boot start position
 $ErrorActionPreference = 'Stop'
+$env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
 Set-Location $root
 $ms = Join-Path $root 'tools\debug\manual-session.ps1'

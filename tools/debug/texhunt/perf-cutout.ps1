@@ -4,6 +4,7 @@
 param([Parameter(Mandatory)][string]$Label, [string]$Boot = 'h001', [string]$Spot = '', [switch]$Hd, [string]$Pack = '',
       [int]$Interp = 0, [string]$Modes = '0,3', [int]$Rounds = 3)
 $ErrorActionPreference = 'Stop'
+$env:NO100F_DEV_TOOLS = '1'  # dev menu (F8) on for this session's game (built-in dev menu; older builds use the patch)
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path   # repo root
 Set-Location $root
 $cmd = Join-Path $root 'Play\devmenu.txt'

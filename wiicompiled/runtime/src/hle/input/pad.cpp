@@ -4,6 +4,7 @@
 #include "input_bindings.h"
 #include "wii_remote_input.h"
 #include "runtime_log.h"
+#include "no100f_devmenu.h"
 
 #include <aurora/aurora.h>
 #include <SDL3/SDL_gamepad.h>
@@ -138,6 +139,10 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     }
     FillTriggersHeldByButtons(statuses);
     InputBindings::Apply(statuses);
+    if (const uint16_t pressed = no100f_devmenu::PressedButtons()) {
+        statuses[0].err = PAD_ERR_NONE;
+        statuses[0].button |= pressed;
+    }
     if (uint16_t scripted = 0; WiiRemoteInput::ScriptedPadButtons(scripted)) {
         statuses[0].err = PAD_ERR_NONE;
         statuses[0].button |= scripted;
