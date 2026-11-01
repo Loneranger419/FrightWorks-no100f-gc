@@ -70,6 +70,14 @@ The game builds to `Play\`; the package goes to `dist\`. Packaging expects the H
 GPLv3 ([`LICENSE`](LICENSE)); bundled components keep their own licenses. FrightWorks is a modified version of
 Scooby-Doo: Refrightened by JosiahG, changed by Loneranger419 from 2026-10-31 on (the git history lists every change).
 
+Not covered by the GPL (these stay under their owners' terms):
+
+- `launcher/art/`, `launcher/refrightened.ico`, `launcher/refrightened-256.png`, `launcher/scooby.ico`: Scooby-Doo and
+  Shaggy artwork, © Hanna-Barbera / Warner Bros.
+- `launcher/title.ttf`: the "Scooby Doo" font by Lauren Ashpole, freeware; commercial use requires a donation
+  ([FontSpace](https://www.fontspace.com/scooby-doo-font-f7039))
+- `docs/`: screenshots of the game and the launcher
+
 Scooby-Doo ™ & © Hanna-Barbera / Warner Bros. Night of 100 Frights © THQ / Warner Bros. Interactive, developed by
 Heavy Iron Studios. Unofficial fan project, not affiliated with or endorsed by them. The repository contains no game
 code or assets; the game's data is read from your own copy.
