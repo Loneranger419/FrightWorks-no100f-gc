@@ -23,7 +23,7 @@ param(
     [switch]$Remove
 )
 $ErrorActionPreference = 'Stop'
-$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path  # this file is tools\debug\play-patched.ps1 (junction)
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path  # this file is tools\debug\play-patched.ps1
 $patchDir = Join-Path $PSScriptRoot 'patches'
 $exe = Join-Path $root 'Play\Scooby-Doo Refrightened.exe'
 # powershell -File passes "-Patch a,b" as one string

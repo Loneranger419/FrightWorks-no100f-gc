@@ -36,3 +36,7 @@ texture_pack/
 
 # notes for development sessions, not part of the project
 AGENTS.md
+
+# Claude Code: only the shared skills are tracked
+/.claude/*
+!/.claude/skills/

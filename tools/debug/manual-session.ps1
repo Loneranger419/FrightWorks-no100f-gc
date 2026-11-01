@@ -32,7 +32,7 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 3.0
 
-$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path  # this file is tools\debug\manual-session.ps1 (junction to the debug repo)
+$root = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path  # this file is tools\debug\manual-session.ps1
 $play = Join-Path $root 'Play'
 $exe = Join-Path $play 'Scooby-Doo Refrightened.exe'
 $outDir = Join-Path $root 'autotest\manual'

@@ -35,6 +35,10 @@ For music-only listening in the hubs, make sure no holiday fires: builds with PR
 builds read the date 2000-01-01 (fireworks every load) unless they have PR #12 or `tools\debug\patches\real-date.patch`
 (`NO100F_REAL_DATE=1`).
 
+**Stuck loop** (music repeating ~1 s, hub report 2026-10-25, not reproduced yet): `python tools\debug\audio\loopcheck.py
+<dump> --scan 10` (stuck ring ≈ 0.99, normal music ≈ 0.1). `tools\debug\audio\loop-capture.ps1 -Label x [-Boot h001]
+[-Hd] [-Cmd "scene H001" -CmdAt 20]` boots a scene with the dump on and checks it; `texhunt\hunt.ps1` checks every session.
+
 ## Game facts
 
 - Music = one ADPCM **stream** voice (`is_stream 1`, e.g. PB `8025EAF4` in `h002`), 48 kHz source (SNDI may say 47999),

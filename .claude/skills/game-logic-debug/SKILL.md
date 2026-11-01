@@ -76,7 +76,7 @@ is skipped with pad A once the game allows it (per-cutscene delay); `0x80245540`
 player has control (0 in cutscenes and in-world camera pans such as the i001 key, which can't be skipped; dialogue boxes
 like w028's Fred are in control and advance with A). The game counts all of these as "in play". Button presses for
 scripts: `Play/devmenu_press.txt`, read every 30 frames even outside play, lines `BUTTON[+BUTTON] [FRAMES] [cutscene]`
-(`cutscene` = only while one plays), injected into pad 1 by PADRead. `autotest	exhunt\look.ps1` presses A every 2 s
+(`cutscene` = only while one plays), injected into pad 1 by PADRead. `tools\debug\texhunt\look.ps1` presses A every 2 s
 while `cutscene yes`, then waits for `control yes`.
 
 Textures tab (for HD pack audits): reads `UserData/devmenu_textures.txt` (tab-separated `id file severity asset scenes level`,
@@ -92,6 +92,11 @@ size, wrap, filters, mips/LODs, alpha compare, blend, z test/func/write, z-befor
 Disc textures without a pack file are logged too (every static texture is named at upload, `TextureRef::debugKey`).
 Take it with HD on: aurora keeps palette (TLUT) mirrors only when `texture_replacements = true`, so with HD off every
 C4/C8/C14X2 key gets a zero palette hash. Rows tagged `none` were drawn before the scene ID was set (boot, first frames).
+
+Scripts around the dev menu: `tools\debug\texhunt\` (`look.ps1` open at a spot, `spots-run.ps1` shots, `hunt.ps1` sessions;
+list in `tools\debug\README.md`). "Which geometry samples this texture?": `texhunt\tint-pack.py --hip <HIP> --match <name>
+--out autotest\texhunt\tint-x`, then `look.ps1 ... -Extra autotest\texhunt\tint-x` (found the dormer roof + sill using the
+Creeper frames). i004 fog bank from a running dev menu build: `tools\debug\game\fogdump.ps1 -Label x`.
 
 - Scene switch = the game's portal path: write a portal + asset (+0x08 camera, +0x0C marker, +0x10 yaw deg, +0x14 scene ID)
   in a reserved page (0x816FF000, lowers the arena by 4 KB) and set the pending portal `[[0x80245CF4]+0x70]`. The scene
@@ -125,7 +130,9 @@ Every 20 main-loop frames it runs the lines in `Play/postool.txt`, then deletes 
 
 ## Measuring flicker (`tools/debug/capture/`)
 
-- `record.ps1 -Out x.mp4 [-Seconds 6] [-Toggle]`: gdigrab of the game's client rect (window capture of the swapchain is black).
+- `record.ps1 -Out x.mp4 [-Seconds 6] [-Method ddagrab|gdigrab] [-Toggle]`: the game's client rect (window capture of the
+  swapchain is black). ddagrab (default) makes the window topmost and works on any monitor; gdigrab = the lossless grab
+  the PR #14 flicker counts used.
   `-Toggle` holds `Play/fogstat.txt` for the duration (for `fogstat-probes.patch`).
 - `flashcount.py x.mp4`: drops duplicate frames, counts cells in the lower half that jump >3 for exactly one frame.
 - `triplet.py x.mp4 K out.png [box]`: frames K-1/K/K+1 + amplified difference, to see what flashed.

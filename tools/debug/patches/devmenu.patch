@@ -1172,7 +1172,7 @@ index 0000000..1b8cc67
 +
 +// Verdicts per scene, UserData/devmenu_verdicts.txt (tab-separated: id, scene, status; scene "*" = every scene). The
 +// verdict button sets fine/bugged/fixed for the current scene (a texture can be fine in one level and broken in
-+// another); autotest/texhunt/verdicts.py merges them into suspects.csv and adds "fixed" for textures fixed in the pack.
++// another); tools/debug/texhunt/verdicts.py merges them into suspects.csv and adds "fixed" for textures fixed in the pack.
 +std::map<std::pair<std::string, std::string>, std::string> g_verdicts;  // (id, scene) -> status
 +bool g_hideFine = true;
 +
@@ -1192,7 +1192,7 @@ index 0000000..1b8cc67
 +        g_verdicts[{id, sceneName}] = status;
 +    }
 +    std::ofstream out(VerdictsPath(), std::ios::trunc);
-+    out << "# id\tscene\tstatus  (dev menu Textures tab; autotest/texhunt/verdicts.py)\n";
++    out << "# id\tscene\tstatus  (dev menu Textures tab; tools/debug/texhunt/verdicts.py)\n";
 +    for (const auto& [key, vstatus] : g_verdicts) out << key.first << '\t' << key.second << '\t' << vstatus << '\n';
 +    g_status = id + (status.empty() ? " unmarked" : " marked " + status) + " in " + sceneName;
 +}
@@ -1689,7 +1689,7 @@ index 0000000..1b8cc67
 +    if (ImGui::Combo("Cut-outs (F7 cycles)", &cutout, kCutoutModes, 4)) aurora_set_cutout_mode(cutout);
 +#endif
 +    if (g_suspects.empty()) {
-+        ImGui::TextWrapped("No suspects: put devmenu_textures.txt in UserData (autotest\\texhunt\\report.py writes it).");
++        ImGui::TextWrapped("No suspects: put devmenu_textures.txt in UserData (copy autotest\\texhunt\\devmenu_textures.txt).");
 +        return;
 +    }
 +    ImGui::Checkbox("This scene only", &g_suspectsThisScene);

@@ -1,4 +1,4 @@
-# Print the folder holding ffmpeg.exe + ffprobe.exe: from PATH, else tools\local\ffmpeg\bin, else download a local copy there
+# Print the folder holding ffmpeg.exe + ffprobe.exe: from PATH, else tools\debug\local\ffmpeg\bin, else download a local copy there
 # (BtbN win64 GPL build from GitHub, SHA-256 checked against the release's checksums.sha256; GPL for libx264).
 #   $bin = & tools\debug\capture\get-ffmpeg.ps1 [-SkipPath]     -SkipPath ignores PATH (tests the local copy / download)
 # Only the folder goes to stdout; progress goes to stderr, so callers can capture the output.
