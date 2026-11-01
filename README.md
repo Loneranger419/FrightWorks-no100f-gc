@@ -27,7 +27,7 @@ ports of the other console versions may follow.
   Controller). The launcher detects an Xbox controller and asks once which layout to use
 - GameCube memory-card saves
 - Option to skip the intro movies; mods that replace game files or textures
-- The game's holiday events follow the real date, or pick a holiday or turn them off on the launcher's **Play** page
+- The game's holiday events follow the real date, or pick a holiday or turn them off on the launcher's **Extras** page
 
 **No game data is included.** You need your own disc image.
 
@@ -41,9 +41,9 @@ Requires Windows 10/11 (64-bit) and **Night of 100 Frights, GameCube USA v1.01 (
 `.gcm` or `.ciso`.
 
 1. Unzip the [latest release](https://github.com/Loneranger419/FrightWorks-no100f-gc/releases/latest).
-2. Open `FrightWorks.exe`, choose your disc image on the **Play** page, then press **PLAY**.
+2. Open `FrightWorks.exe` and press **Play**. The first time, it asks for your disc image (**Extras**).
 
-Settings are on the launcher's **Display** page and in game (**F10**). **F11** toggles fullscreen, **F2** saves a
+Settings are in the launcher (**Settings**) and in game (**F10**). **F11** toggles fullscreen, **F2** saves a
 screenshot to the `Screenshots` folder and **F1** opens this page in your browser. Saves, settings
 and mods live in `data\UserData`; unzip a new release over the old folder to update.
 
@@ -81,7 +81,7 @@ Tests, playtest sessions and the debug tools (dev menu, logs, scripted input): [
 - HD texture pack by **dogerki**
   ([Dolphin forums](https://forums.dolphin-emu.org/Thread-scooby-doo-night-of-100-frights-hd-texture-pack-ai))
 - Button prompts from [Kenney's Input Prompts](https://kenney.nl/assets/input-prompts) (CC0)
-- Launcher font "Scooby Doo" by Lauren Ashpole ([FontSpace](https://www.fontspace.com/scooby-doo-font-f7039))
+- Launcher lettering: [Luckiest Guy](https://fonts.google.com/specimen/Luckiest+Guy) by Astigmatic (Apache 2.0)
 
 ## License
 
@@ -90,10 +90,8 @@ Scooby-Doo: Refrightened by JosiahG, changed by Loneranger419 from 2026-10-31 on
 
 Not covered by the GPL (these stay under their owners' terms):
 
-- `launcher/art/`, `launcher/frightworks.ico`, `launcher/frightworks-256.png`, `launcher/scooby.ico`: Scooby-Doo and
-  Shaggy artwork, © Hanna-Barbera / Warner Bros.
-- `launcher/title.ttf`: the "Scooby Doo" font by Lauren Ashpole, freeware; commercial use requires a donation
-  ([FontSpace](https://www.fontspace.com/scooby-doo-font-f7039))
+- `launcher/fonts/LuckiestGuy-Regular.ttf`: the Luckiest Guy font by Astigmatic, Apache License 2.0
+  ([`launcher/fonts/LuckiestGuy-LICENSE.txt`](launcher/fonts/LuckiestGuy-LICENSE.txt))
 - `docs/`: screenshots of the game and the launcher
 
 Scooby-Doo ™ & © Hanna-Barbera / Warner Bros. Night of 100 Frights © THQ / Warner Bros. Interactive, developed by
