@@ -3,6 +3,7 @@
 #include "hle/controller_status_contract.h"
 #include "hle/no100f_pad_actions.h"
 #include "hle/no100f_xbox_layout.h"
+#include "controller_button_names.h"
 #include "input_bindings.h"
 #include "wii_remote_input.h"
 #include "runtime_config.h"
@@ -30,22 +31,75 @@ std::atomic<bool> g_rumbleEnabled{true};
 // Original Xbox controls (hle/no100f_xbox_layout.h), applied to each controller's mapped buttons inside PADRead.
 std::array<No100fXboxLayout::PortState, PAD_CHANMAX> g_xboxPorts;
 bool g_xboxMenu = false;
+// The pad buttons for Black / White ([controller] xbox_black / xbox_white), read once per PADRead while the layout is
+// on; PAD_NATIVE_BUTTON_DISABLED when off or unknown.
+std::array<uint32_t, 2> g_xboxNative{PAD_NATIVE_BUTTON_DISABLED, PAD_NATIVE_BUTTON_DISABLED};
+
+uint32_t XboxNative(size_t action) {
+    const std::string name = RuntimeConfigFile::XboxButton(action);
+    const auto* native = ControllerNames::FindNativeButton(name);
+    if (native == nullptr || native->nativeButton == PAD_NATIVE_BUTTON_INVALID) {
+        static std::array<std::string, 2> reported;
+        if (reported[action] != name) {
+            reported[action] = name;
+            RT_LOGF(RT_TAG_CONFIG, "[xbox-layout] unknown %s button '%s': off\n", action == 0 ? "Black" : "White",
+                    name.c_str());
+        }
+        return PAD_NATIVE_BUTTON_DISABLED;
+    }
+    // "left_trigger@30": the threshold rides in the binding like the button mapping's.
+    if (PADIsAxisButton(native->nativeButton)) {
+        if (const size_t at = name.find('@'); at != std::string::npos) {
+            const int threshold = std::atoi(name.c_str() + at + 1);
+            if (threshold >= 1 && threshold <= 100) {
+                return PADAxisButtonIdentity(native->nativeButton) | (static_cast<uint32_t>(threshold) << 8);
+            }
+        }
+    }
+    return native->nativeButton;
+}
+
+bool IsXboxBound(uint32_t nativeButton) {
+    if (nativeButton == PAD_NATIVE_BUTTON_INVALID || nativeButton == PAD_NATIVE_BUTTON_DISABLED) return false;
+    return std::any_of(g_xboxNative.begin(), g_xboxNative.end(), [&](uint32_t bound) {
+        return bound != PAD_NATIVE_BUTTON_DISABLED && PADAxisButtonIdentity(bound) == PADAxisButtonIdentity(nativeButton);
+    });
+}
+
+// Buttons and trigger / stick directions, like aurora's own mapping (pad.cpp is_native_binding_pressed).
+bool NativeButtonHeld(SDL_Gamepad* gamepad, uint32_t nativeButton) {
+    if (gamepad == nullptr || nativeButton == PAD_NATIVE_BUTTON_INVALID || nativeButton == PAD_NATIVE_BUTTON_DISABLED) {
+        return false;
+    }
+    if (PADIsAxisButton(nativeButton)) {
+        const uint32_t axis = PADAxisButtonAxis(nativeButton);
+        const uint32_t threshold = PADAxisButtonThreshold(nativeButton);
+        if (axis >= SDL_GAMEPAD_AXIS_COUNT || threshold < 1 || threshold > 100) return false;
+        int value = SDL_GetGamepadAxis(gamepad, static_cast<SDL_GamepadAxis>(axis));
+        if (PADAxisButtonNegative(nativeButton)) value = -value;
+        return value > 0 && value * 100 >= static_cast<int>(threshold) * 32767;
+    }
+    return nativeButton < SDL_GAMEPAD_BUTTON_COUNT &&
+           SDL_GetGamepadButton(gamepad, static_cast<SDL_GamepadButton>(nativeButton));
+}
 
 u16 XboxLayoutFilter(u32 port, SDL_Gamepad* gamepad, u16 buttons) {
     if (port >= g_xboxPorts.size()) {
         return buttons;
     }
-    return No100fXboxLayout::Filter(g_xboxPorts[port], buttons, g_xboxMenu,
-                                    SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_RIGHT_SHOULDER),
-                                    SDL_GetGamepadButton(gamepad, SDL_GAMEPAD_BUTTON_LEFT_SHOULDER));
-}
-
-bool NativeButtonHeld(SDL_Gamepad* gamepad, uint32_t nativeButton) {
-    if (gamepad == nullptr || nativeButton == PAD_NATIVE_BUTTON_INVALID ||
-        nativeButton >= SDL_GAMEPAD_BUTTON_COUNT) {
-        return false;
+    // The Black / White buttons send only Black / White: drop the GameCube buttons that only they pressed.
+    u16 bound = 0, others = 0;
+    for (const bool alt : {false, true}) {
+        u32 count = 0;
+        PADButtonMapping* mappings = alt ? PADGetAltButtonMappings(port, &count) : PADGetButtonMappings(port, &count);
+        for (u32 i = 0; mappings != nullptr && i < count; ++i) {
+            if (IsXboxBound(mappings[i].nativeButton)) bound |= mappings[i].padButton;
+            else if (NativeButtonHeld(gamepad, mappings[i].nativeButton)) others |= mappings[i].padButton;
+        }
     }
-    return SDL_GetGamepadButton(gamepad, static_cast<SDL_GamepadButton>(nativeButton));
+    buttons = No100fXboxLayout::DropBound(buttons, bound, others);
+    return No100fXboxLayout::Filter(g_xboxPorts[port], buttons, g_xboxMenu, NativeButtonHeld(gamepad, g_xboxNative[0]),
+                                    NativeButtonHeld(gamepad, g_xboxNative[1]));
 }
 
 // A digital button bound to L or R has no analog travel of its own. On real
@@ -74,6 +128,9 @@ void FillTriggersHeldByButtons(PADStatus* statuses) {
                 const PADButtonMapping& mapping = mappings[i];
                 if (mapping.padButton != PAD_TRIGGER_L && mapping.padButton != PAD_TRIGGER_R) {
                     continue;
+                }
+                if (RuntimeConfigFile::XboxOriginalLayout() && IsXboxBound(mapping.nativeButton)) {
+                    continue;  // Black / White, not gum / run
                 }
                 if (!NativeButtonHeld(gamepad, mapping.nativeButton)) {
                     continue;
@@ -152,6 +209,7 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
         for (auto& port : g_xboxPorts) {
             port.black = port.white = false;
         }
+        g_xboxNative = {XboxNative(0), XboxNative(1)};
     }
     uint32_t rumbleMask = xboxLayout ? PADReadWithGamepadButtonFilter(statuses, XboxLayoutFilter) : PADRead(statuses);
     // Wii Remotes reach the game through KPAD, not as GameCube pads. This also
@@ -178,6 +236,17 @@ extern "C" uint32_t PAD__Read_HLE(uint32_t statusPtr)
     }
     aurora_set_button_icon_style(family >= 0 && xboxLayout && !g_xboxMenu ? family + 3 : family);
     FillTriggersHeldByButtons(statuses);
+    if (xboxLayout) {
+        // A trigger used for Black / White doesn't also pull the GameCube trigger (gum / run) with its analog travel.
+        for (const uint32_t native : g_xboxNative) {
+            if (native == PAD_NATIVE_BUTTON_DISABLED || !PADIsAxisButton(native)) continue;
+            const uint32_t axis = PADAxisButtonAxis(native);
+            for (auto& status : statuses) {
+                if (axis == SDL_GAMEPAD_AXIS_LEFT_TRIGGER) status.triggerLeft = 0;
+                if (axis == SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) status.triggerRight = 0;
+            }
+        }
+    }
     InputBindings::Apply(statuses);
     if (const uint16_t pressed = no100f_devmenu::PressedButtons()) {
         statuses[0].err = PAD_ERR_NONE;

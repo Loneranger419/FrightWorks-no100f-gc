@@ -270,8 +270,9 @@ sealed class MainForm : Form
         body.Controls.Add(table);
         body.Controls.Add(Note("Original Xbox: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display, " +
                                "LT gum, RT run, LB soap bubble (Xbox White), RB sneak (Xbox Black); the bumpers work together with the " +
-                               "triggers, and the hints in the game name these buttons. GameCube: B head smash and back in menus, " +
-                               "X dig / enter / talk, Z + L soap bubble, Z + R sneak (Z = RB). Also in F10 > Controls."));
+                               "triggers, and the hints in the game name these buttons. Black and White can go on other buttons in F10 > Controls. " +
+                               "GameCube: B head smash and back in menus, X dig / enter / talk, Z + L soap bubble, Z + R sneak (Z = RB). " +
+                               "Also in F10 > Controls."));
         body.Controls.Add(Title("Keyboard"));
         table = Table();
         foreach (var (what, key) in new[] { ("Move", "W A S D"), ("Camera (C-stick)", "Arrow keys"), ("A (jump)", "Space"), ("B", "Left Shift"),

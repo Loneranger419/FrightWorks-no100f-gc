@@ -120,6 +120,30 @@ int main() {
         Require(Rewrite("Press the $D~$C Button when standing in a flower patch to dig.") ==
                 "Press the $D~$C Button when standing in a flower patch to dig.", "button pictures unchanged");
 
+        // Black / White rebound ([controller] xbox_black / xbox_white).
+        using No100fXboxText::ButtonName;
+        Require(ButtonName("right_shoulder") == "RB" && ButtonName("left_shoulder") == "LB" && ButtonName("north") == "Y" &&
+                    ButtonName("left_trigger@30") == "LT" && ButtonName("right_paddle1") == "P1",
+                "Xbox button names");
+        Require(ButtonName("disabled").empty() && ButtonName("left_stick_up").empty() && ButtonName("nonsense").empty(),
+                "no name: hint left as on the disc");
+        const No100fXboxText::Names rebound{"Y", "RT"};
+        Require(Rewrite("Press the Z Button and R Button at the same time to hide from and sneak past monsters.", rebound) ==
+                    "Press the Y Button to hide from and sneak past monsters.", "rebound Black");
+        Require(Rewrite("Now you can press the Z Button and L Button at the same time to trap a monster.", rebound) ==
+                    "Now you can press the RT Button to trap a monster.", "rebound White");
+        const No100fXboxText::Names off{"", ""};
+        Require(Rewrite("Hold down the Z + R Button while moving forward to try it out.", off) ==
+                    "Hold down the Z + R Button while moving forward to try it out.", "Black off: unchanged");
+        Require(Rewrite("by holding the R Button while moving!", off) == "by holding the RT Button while moving!",
+                "run hint rewritten either way");
+        // The GameCube buttons only the Black / White pad buttons press are dropped.
+        constexpr uint16_t Z = 0x0010, R = 0x0020, A = 0x0100;
+        using No100fXboxLayout::DropBound;
+        Require(DropBound(Z | A, Z, 0) == A, "Black's Z dropped");
+        Require(DropBound(Z | A, Z, Z) == (Z | A), "Z kept while another pad button sends it");
+        Require(DropBound(R | A, Z, 0) == (R | A), "unbound buttons kept");
+
         const auto hip = MakeHip("Now you can press the Z Button and L Button at the same time to trap a monster.");
         const auto patches = No100fXboxText::FindPatches(hip.data(), hip.size());
         Require(patches.size() == 1 && patches[0].offset == 0x100 && patches[0].bytes.size() == 0x80, "one TEXT patch");
