@@ -109,6 +109,9 @@ struct RuntimeUserConfig {
     std::optional<bool> rumbleEnabled;
     // [controller] layout: "gamecube" (default) or "xbox_original" (hle/no100f_xbox_layout.h).
     std::optional<std::string> controllerLayout;
+    // [controller] xbox_black / xbox_white: the pad button for Xbox Black (sneak) / White (soap bubble) with the
+    // original Xbox layout, as a controller_button_names.h name ("right_shoulder", "north", "disabled", ...).
+    std::array<std::optional<std::string>, 2> xboxButtons;
     std::optional<int32_t> muteHotkey;
     std::map<std::string, std::string> controllerExpressions;
     // NSMBW: [keyboard] action = "comma-separated SDL scancode names" (keybinds.h).
@@ -541,6 +544,8 @@ inline RuntimeUserConfig ParseConfigDocument(const toml::value& document) {
 
     config.rumbleEnabled = FindConfigValue<bool>(document, "controller", "rumble");
     config.controllerLayout = FindConfigValue<std::string>(document, "controller", "layout");
+    config.xboxButtons[0] = FindConfigValue<std::string>(document, "controller", "xbox_black");
+    config.xboxButtons[1] = FindConfigValue<std::string>(document, "controller", "xbox_white");
     if (auto value = FindConfigInt(document, "audio", "mute_key")) {
         config.muteHotkey = *value;
     }
@@ -960,6 +965,17 @@ inline bool XboxOriginalLayout() {
 inline bool SetXboxOriginalLayout(bool value) {
     Mutable().controllerLayout = value ? "xbox_original" : "gamecube";
     return WriteSetting("controller", "layout", FormatString(*Mutable().controllerLayout));
+}
+
+// 0 = Black (sneak, default right bumper), 1 = White (soap bubble, default left bumper).
+inline std::string XboxButton(size_t index) {
+    const auto& value = Get().xboxButtons[index & 1];
+    return value ? *value : (index == 0 ? "right_shoulder" : "left_shoulder");
+}
+
+inline bool SetXboxButton(size_t index, const std::string& value) {
+    Mutable().xboxButtons[index & 1] = value;
+    return WriteSetting("controller", (index & 1) == 0 ? "xbox_black" : "xbox_white", FormatString(value));
 }
 
 inline int32_t MuteHotkey(int32_t fallback) {

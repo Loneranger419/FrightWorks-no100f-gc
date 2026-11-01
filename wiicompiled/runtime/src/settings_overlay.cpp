@@ -794,6 +794,35 @@ void DrawRumbleSettings() {
     }
 }
 
+// The Xbox's Black / White buttons ([controller] xbox_black / xbox_white): any pad button, trigger or stick direction.
+// The pad button sends only Black / White, not the GameCube button it is mapped to.
+void DrawXboxButtonSettings() {
+    using namespace OverlayTheme;
+    const float labelWidth = Px(210);
+    const float controlWidth = std::max(Px(200), std::min(Px(320), ImGui::GetContentRegionAvail().x - labelWidth));
+    static constexpr const char* kActions[] = {"Black (sneak)", "White (soap bubble)"};
+    for (size_t action = 0; action < 2; ++action) {
+        const std::string current = RuntimeConfigFile::XboxButton(action);
+        const auto* currentItem = ControllerNames::FindNativeButton(current);
+        const auto label = [](const ControllerNames::NativeButtonItem& item) {
+            return item.nativeButton == PAD_NATIVE_BUTTON_DISABLED ? "Off" : item.label;
+        };
+        RowLabel(kActions[action], labelWidth, controlWidth);
+        ImGui::PushID(static_cast<int>(action));
+        if (ImGui::BeginCombo("##xboxbutton", currentItem != nullptr ? label(*currentItem) : current.c_str())) {
+            for (const auto& item : kNativeButtons) {
+                if (item.nativeButton == PAD_NATIVE_BUTTON_INVALID) continue;  // "Default" means nothing here
+                const bool selected = currentItem == &item;
+                if (ImGui::Selectable(label(item), selected)) RuntimeConfigFile::SetXboxButton(action, item.configName);
+                if (selected) ImGui::SetItemDefaultFocus();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::PopID();
+    }
+    Hint("The chosen pad button sends only Black or White. Hints in the game name it from the next level load.");
+}
+
 void DrawControllerSettings() {
     OverlayTheme::SectionTitle("Controller");
     OverlayTheme::Hint("Every connected gamepad controls Scooby (player 1), mapped for its type.");
@@ -803,10 +832,13 @@ void DrawControllerSettings() {
         RuntimeConfigFile::SetXboxOriginalLayout(xboxLayout);
     }
     OverlayTheme::Hint("On: A jump, X head smash, B dig / enter / talk and back in menus, Y on-screen display, LT gum, "
-                       "RT run, LB soap bubble (Xbox White), RB sneak (Xbox Black), Start pause; the bumpers work together "
+                       "RT run, White soap bubble (LB), Black sneak (RB), Start pause; Black and White work together "
                        "with the triggers. The hints say so too from the next level load. Off (GameCube): B head smash and "
                        "back, X dig, Z + L bubble, Z + R sneak. Gamepads only; the button mapping below stays in GameCube "
                        "buttons either way.");
+    if (RuntimeConfigFile::XboxOriginalLayout()) {
+        DrawXboxButtonSettings();
+    }
     for (int port = 0; port < PAD_MAX_CONTROLLERS; ++port) {
         const std::string label = "Port " + std::to_string(port + 1);
         ImGui::RadioButton(label.c_str(), &g_controllerPort, port);

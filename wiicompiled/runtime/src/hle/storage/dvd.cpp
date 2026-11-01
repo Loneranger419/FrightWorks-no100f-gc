@@ -1003,27 +1003,31 @@ extern "C" void DVDInit_8015EA1C()
 PPC_NATIVE_OVERRIDE_VOID(8010F52C, DVDInit_8015EA1C, (), ());
 
 // Original Xbox controls: tutorial hints that name GameCube buttons get the Xbox layout's (hle/no100f_xbox_text.h).
-// Each level file is scanned once, on its first read while the layout is on; `buffer` holds the file from `offset` on.
+// Each level file is scanned once per Black / White binding, on its first read while the layout is on; `buffer` holds
+// the file from `offset` on.
 static void ApplyXboxText(const DVDFileEntry& entry, uint64_t offset, std::vector<uint8_t>& buffer) {
     if (buffer.empty() || !RuntimeConfigFile::XboxOriginalLayout()) return;
     const std::string ext = entry.hostPath.extension().string();
     if (ext.size() != 4 || (ext[1] | 0x20) != 'h' || (ext[2] | 0x20) != 'i' || (ext[3] | 0x20) != 'p') return;
     static std::mutex mutex;
-    static std::map<fs::path, std::vector<No100fXboxText::Patch>> patches;
+    static std::map<std::pair<fs::path, std::string>, std::vector<No100fXboxText::Patch>> patches;
+    const No100fXboxText::Names names{No100fXboxText::ButtonName(RuntimeConfigFile::XboxButton(0)),
+                                      No100fXboxText::ButtonName(RuntimeConfigFile::XboxButton(1))};
+    const auto key = std::make_pair(entry.hostPath, names.black + '|' + names.white);
     std::lock_guard lock(mutex);
-    auto it = patches.find(entry.hostPath);
+    auto it = patches.find(key);
     if (it == patches.end()) {
         std::vector<uint8_t> file;
         DvdReadContract::HostReadFailure failure;
         std::vector<No100fXboxText::Patch> found;
         if (ReadHostFile(entry.hostPath, 0, entry.size, file, failure)) {
-            found = No100fXboxText::FindPatches(file.data(), file.size());
+            found = No100fXboxText::FindPatches(file.data(), file.size(), names);
             if (!found.empty()) {
                 RT_LOGF(RT_TAG_RUNTIME, "[xbox-layout] %zu hint text(s) in %s use the Xbox buttons\n", found.size(),
                         HostPathText(entry.hostPath).c_str());
             }
         }
-        it = patches.emplace(entry.hostPath, std::move(found)).first;
+        it = patches.emplace(key, std::move(found)).first;
     }
     No100fXboxText::Apply(it->second, offset, buffer);
 }

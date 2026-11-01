@@ -28,6 +28,13 @@ constexpr uint16_t SwapBX(uint16_t buttons) {
     return static_cast<uint16_t>((buttons & ~(kB | kX)) | ((buttons & kB) << 1) | ((buttons & kX) >> 1));
 }
 
+// The GameCube buttons that only the Black / White pad buttons pressed are dropped: with this layout those buttons
+// send Black / White instead. `bound` = GameCube buttons mapped to the Black / White pad buttons, `others` = GameCube
+// buttons another held pad button sends.
+constexpr uint16_t DropBound(uint16_t buttons, uint16_t bound, uint16_t others) {
+    return static_cast<uint16_t>(buttons & ~(bound & ~others));
+}
+
 struct PortState {
     bool menu = false;
     uint16_t suppressed = 0;  // B/X held when the menu state changed: ignored until released
@@ -35,7 +42,8 @@ struct PortState {
 };
 
 // `gamepad`: the GC buttons from this controller's mapping (keyboard input is added later, unchanged).
-// `black` / `white`: right / left bumper held, kept for the pad update (No100fPad::XboxButtons).
+// `black` / `white`: the Black / White buttons held ([controller] xbox_black / xbox_white, default right / left bumper),
+// kept for the pad update (No100fPad::XboxButtons).
 inline uint16_t Filter(PortState& state, uint16_t gamepad, bool menu, bool black, bool white) {
     uint16_t out = static_cast<uint16_t>(gamepad & ~kZ);
     if (!menu) out = SwapBX(out);
