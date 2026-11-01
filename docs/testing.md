@@ -102,7 +102,7 @@ powershell -ExecutionPolicy Bypass -File tools\debug\play-patched.ps1 -HdTexture
 ```
 
 In game, **F8**: current level and Scooby's position, go to any level (Levels tab), save spots and go back to them, god mode,
-monsters off (all or one by one), a Textures tab (find a texture, mark it), an Effects tab and a free camera. Spots are
+monsters off (all or one by one), power-ups on/off (all at once or one by one), a Textures tab (find a texture, mark it), an Effects tab and a free camera. Spots are
 saved in `Play\UserData\devmenu_spots.txt`. Travel is one transfer at a time: asked for while paused or in a
 cutscene, it waits for normal play (**Cancel travel** drops it). **Skip** presses the game's own skip button for a
 recorded cutscene (A) or the title intro / attract demo (Start). More commands (scripted through `Play\devmenu.txt`) are in the

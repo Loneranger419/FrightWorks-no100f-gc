@@ -68,10 +68,10 @@ so a bug seen in the release but not in a dev build may be an HD texture: retry 
 (another scene loads first; one transfer at a time, queued until in play with no cutscene, Cancel travel, 60 s
 timeout; travel turns the free camera off), Skip button (presses the game's own A in a recorded cutscene, Start on the
 title intro / attract demo, for up to 10 s), god mode (no damage, green Scooby), Levels tab, Monsters tab (all off in every level, or one
-by one in this scene). Spots: `UserData/devmenu_spots.txt` (`I004 x y z yawRad name`). Scriptable through
+by one in this scene), Power-ups tab (unlock/lock all or one by one). Spots: `UserData/devmenu_spots.txt` (`I004 x y z yawRad name`). Scriptable through
 `Play/devmenu.txt` (every 30 frames, then deleted; results in `Play/devmenu.log`; the file is left alone until in play with
 no scene/spot transfer pending, unless all its lines are `skip` or, with nothing pending, `scene`): `scene ID`, `skip`, `spot NAME`,
-`save NAME`, `tp X Y Z [YAWDEG]`, `where`, `peek ADDR [N]`, `frame`, `god on|off`, `monsters [on|off]` (list / all),
+`save NAME`, `tp X Y Z [YAWDEG]`, `where`, `peek ADDR [N]`, `frame`, `god on|off`, `powerups [all|none|HEX]`, `powerup NAME on|off` (sd2.ini name without `eSPECIAL_`), `monsters [on|off]` (list / all),
 `monster N|NAME on|off`, `ents` (scene entity list), `textures`. Doesn't touch warp flags or the save file.
 `cutout N` (cut-out draw mode, needs aurora's `AURORA_HAS_CUTOUT_MODE`; F7 cycles), `perf` (draw calls + present
 timing), `cutscene` (`cutscene yes|no control yes|no`).
@@ -110,6 +110,11 @@ Creeper frames). i004 fog bank from a running dev menu build: `tools\debug\game\
 - Teleport: player entity frame `[0x802453C8]`: matrix (pos +0x30), previous pos +0x80, yaw angles +0xA4 and +0xC4; plus the
   model matrix `[[0x802453B4]+0x20]` and the camera target (0x801BD0A0/AC). Writing only the matrix gets rebuilt.
 - In play = mode `[0x80270E18]` 0xB and state `[0x802703C8]` 1. Current scene ID `[[0x80245CF4]+0x6C]`.
+- Power-ups: live mask `0x80245748` (globals + 0x5B8), bits 0-14 in sd2.ini read order: BubbleGum, SoapBar, StickyBoots,
+  Plungers, Slippers, LampShade, BlackKnight, FlowerPot, DivingHelmet, Spring, LightningBolt, FootballHelmet, Umbrella,
+  Shovel, LightningBoltStun. Pickup ORs `1 << [pickup+5]` in (`0x8004F0FC`); pause cheat `0x800ABF08` sets all; a new
+  game copies the eSPECIAL_* mask (globals + 0x820) in (`0x80057748`); kept on a scene change (tested); save block `PLYR`
+  read in `0x800CF2B8`.
 - God mode: sd2.ini `TakeDamage` lives at `0x802459B4` (globals + 0x824) and is read on every hit (`0x8005A430`: health
   +0x2E8 -= damage only when nonzero); held at 0. Tint: player instances `[0x802453B4]` (+0 next, +0x10 RpAtomic), geometry
   `[atomic+0x18]`: flags +8 `|= 0x40` (modulate material colour), materials `[geom+0x20]` x `[geom+0x24]`, colour RGBA at

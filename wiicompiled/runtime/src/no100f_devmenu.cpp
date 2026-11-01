@@ -1,5 +1,5 @@
 // Dev menu (F8) for Scooby-Doo! Night of 100 Frights: teleport to any scene, save spots and go back to them,
-// god mode, monsters off, free camera, texture finder. Only with [game] dev_tools = true (launcher: Extras >
+// god mode, monsters off, power-ups on/off, free camera, texture finder. Only with [game] dev_tools = true (launcher: Extras >
 // Developer tools); otherwise it reserves no memory and ignores F7/F8.
 //
 // Scene switch: the game travels through a portal by setting the current scene's pending portal ([scene+0x70]);
@@ -610,6 +610,49 @@ void UpdateGod() {
     if (InPlay()) ApplyTint();
 }
 
+// Power-ups: one bit each in globals + 0x5B8 (the bit index is the pickup's byte +5; 0x8004F0FC ORs it in, the
+// pause-menu cheat in 0x800ABF08 sets all 15). A new game copies sd2.ini's eSPECIAL_* mask (globals + 0x820, read in
+// 0x800BE6B8 in this bit order) into it (0x80057748); a scene change keeps it (tested i004 -> i001). Save data: the
+// 'PLYR' block reader 0x800CF2B8 reads it back.
+constexpr uint32_t kPowerups = 0x80245748u;  // globals + 0x5B8
+struct Powerup {
+    const char* key;    // sd2.ini name, for the command file
+    const char* label;  // the menu's name (what sd2.ini says it does)
+};
+constexpr Powerup kPowerupList[] = {
+    {"BubbleGum", "Bubble gum (sticky/bouncy gum wads)"},
+    {"SoapBar", "Soap bar (soap bubbles)"},
+    {"StickyBoots", "Sticky boots (anti-sticky)"},
+    {"Plungers", "Plungers (anti-slippery)"},
+    {"Slippers", "Slippers (sneak)"},
+    {"LampShade", "Lampshade (first disguise)"},
+    {"BlackKnight", "Black Knight armour (second disguise)"},
+    {"FlowerPot", "Flower pot (maybe unused)"},
+    {"DivingHelmet", "Diving helmet (last disguise, maybe unused)"},
+    {"Spring", "Springs (double jump)"},
+    {"LightningBolt", "Lightning bolt (thunder stomp)"},
+    {"FootballHelmet", "Football helmet (headbutt)"},
+    {"Umbrella", "Umbrella (float)"},
+    {"Shovel", "Shovel (dig)"},
+    {"LightningBoltStun", "Lightning bolt stun (thunder stomp stuns)"},
+};
+constexpr int kPowerupCount = static_cast<int>(std::size(kPowerupList));
+constexpr uint32_t kAllPowerups = (1u << kPowerupCount) - 1u;
+
+uint32_t Powerups() { return Read32Or0(kPowerups); }
+// Only the 15 power-up bits change; any other bit in the word is left alone.
+void SetPowerups(uint32_t mask, uint32_t bits) { Memory::Write32(kPowerups, (Powerups() & ~mask) | (bits & mask)); }
+
+std::string PowerupList() {
+    const uint32_t v = Powerups();
+    char b[32];
+    std::snprintf(b, sizeof b, "powerups %04X:", v);
+    std::string s = b;
+    for (int i = 0; i < kPowerupCount; ++i)
+        if (v & (1u << i)) s += std::string(" ") + kPowerupList[i].key;
+    return s;
+}
+
 uint32_t BE32(const std::vector<uint8_t>& d, size_t o) {
     return o + 4 <= d.size() ? (uint32_t{d[o]} << 24) | (uint32_t{d[o + 1]} << 16) | (uint32_t{d[o + 2]} << 8) | d[o + 3] : 0;
 }
@@ -890,6 +933,8 @@ const Spot* FindSpot(const std::string& name, uint32_t scene) {
 //   peek ADDR [N]       log N (default 64) words from ADDR
 //   frame               peek the player frame
 //   god on|off          god mode
+//   powerups [all|none|HEX]  log the unlocked power-ups; unlock all / lock all / set the mask
+//   powerup NAME on|off unlock / lock one (sd2.ini name without eSPECIAL_, e.g. Spring)
 //   monsters [on|off]   list this scene's monsters; all monsters off (every scene) / back on
 //   monster N|NAME on|off
 //   ents                log the scene's entity list
@@ -971,6 +1016,28 @@ void PollCommandFile() {
             std::snprintf(b, sizeof b, "god %s, TakeDamage %u, %zu words tinted", g_god ? "on" : "off",
                           Read32Or0(kTakeDamage), g_tintSaved.size());
             g_status = b;
+        } else if (cmd == "powerups") {
+            if (arg == "all") {
+                SetPowerups(kAllPowerups, kAllPowerups);
+            } else if (arg == "none") {
+                SetPowerups(kAllPowerups, 0);
+            } else if (!arg.empty()) {
+                SetPowerups(kAllPowerups, static_cast<uint32_t>(std::strtoul(arg.c_str(), nullptr, 16)));
+            }
+            g_status = PowerupList();
+        } else if (cmd == "powerup") {
+            std::istringstream as(arg);
+            std::string name, state;
+            as >> name >> state;
+            const auto it = std::find_if(std::begin(kPowerupList), std::end(kPowerupList),
+                                         [&](const Powerup& p) { return Lower(p.key) == Lower(name); });
+            if (it == std::end(kPowerupList) || (state != "on" && state != "off")) {
+                g_status = "powerup NAME on|off (" + arg + ")";
+            } else {
+                const uint32_t bit = 1u << (it - std::begin(kPowerupList));
+                SetPowerups(bit, state == "on" ? bit : 0);
+                g_status = PowerupList();
+            }
         } else if (cmd == "monsters") {
             if (arg == "on" || arg == "off") SetAllMonstersOff(arg == "off");
             UpdateMonsters();
@@ -1200,6 +1267,25 @@ void DrawMonsters() {
         ImGui::EndTable();
     }
     ImGui::EndDisabled();
+}
+
+void DrawPowerups() {
+    const uint32_t v = Powerups();
+    if (ImGui::Button("Unlock all")) SetPowerups(kAllPowerups, kAllPowerups);
+    ImGui::SameLine();
+    if (ImGui::Button("Lock all")) SetPowerups(kAllPowerups, 0);
+    ImGui::SameLine();
+    ImGui::TextDisabled("mask %04X", v & kAllPowerups);
+    ImGui::TextWrapped("Changes take effect at once and stay through level changes. A new game or a loaded save "
+                       "replaces them.");
+    if (Read32Or0(kGameMode) != 0xB) ImGui::TextDisabled("Not in a game: starting one resets these.");
+    for (int i = 0; i < kPowerupCount; ++i) {
+        ImGui::PushID(i);
+        const uint32_t bit = 1u << i;
+        bool on = (v & bit) != 0;
+        if (OverlayTheme::Toggle(kPowerupList[i].label, &on)) SetPowerups(bit, on ? bit : 0);
+        ImGui::PopID();
+    }
 }
 
 // Textures tab (Suspect / LoadSuspects above PollCommandFile). "Save spot" saves Scooby's position under the suspect's ID
@@ -1646,6 +1732,10 @@ void Draw() noexcept {
             }
             if (ImGui::BeginTabItem("Monsters")) {
                 DrawMonsters();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem("Power-ups")) {
+                DrawPowerups();
                 ImGui::EndTabItem();
             }
             if (ImGui::BeginTabItem("Textures")) {
